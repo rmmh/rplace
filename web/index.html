@@ -4,7 +4,8 @@
 </head>
 <body style="overflow:hidden;margin:0;background-color:black;color:white;">
 <div style="margin:5px;display:flex;">
-<span id="timestamp"></span>&nbsp;<span id="speed">5x</span></output><input id="slider" type="range" min="50" max="200" value="130" style="flex-grow:1;display:inline;">
+<span id="timestamp"></span>&nbsp;<span id="speed" style="width:3em;text-align:center;">5x</span>
+<input id="slider" type="range" min="0" max="400" value="330" style="flex-grow:1;display:inline;">
 </div>
 <div id="viewport" style="height:100%;user-select:none;overflow:clip">
 <canvas id="canvas" style="image-rendering:pixelated;touch-action:none" width="2000" height="2000" ondragstart="return false">
@@ -29,11 +30,19 @@ for (let c of palette) {
 }
 
 function calcSpeed() {
-    return Math.pow(2, slider.value/10);
+    let val = slider.value/10;
+    if (17 < val && val < 23) {
+        return 0;
+    } else if (val > 20) {
+        return Math.pow(2, val-20);
+    } else {
+        return -Math.pow(2, 20-val);
+    }
 }
 
 slider.oninput = function() {
-    speed.innerText = ("" + (60*calcSpeed()/1000)|0) + "x";
+    let s = 60*calcSpeed()/1000;
+    speed.innerText = ("" + (s>1||s<-1?s|0:Math.round(s*100)/100)) + "x";
 }
 slider.oninput();
 
@@ -46,6 +55,11 @@ function sleepFrame() {
 }
 
 let quadseen = 0;
+
+let pixelsPaletted = new Uint8Array(2000*2000);
+for (let i = 0; i < pixelsPaletted.length; i++) {
+    pixelsPaletted[i] = 31; // white
+}
 
 async function renderBuf(buf) {
     let magic = new TextDecoder().decode(buf.slice(0,8));
@@ -80,7 +94,7 @@ async function renderBuf(buf) {
     let ctx = canvas.getContext('2d');
 
     let imageData = ctx.getImageData(0, 0, 2000, 2000);;
-    let pixels = imageData.data;;
+    let pixels = imageData.data;
 
     function dumpImageData() {
         ctx.putImageData(imageData, 0, 0);
@@ -94,6 +108,18 @@ async function renderBuf(buf) {
         pixels[o+1] = pal[3 * col + 1];
         pixels[o+2] = pal[3 * col + 2];
         pixels[o+3] = 255;
+    }
+
+    function xor(x, y, col_xor) {
+        let col = pixelsPaletted[x + y * 2000] ^= col_xor;
+        let o = 4 * (x + y * 2000);
+        pixels[o+0] = pal[3 * col];
+        pixels[o+1] = pal[3 * col + 1];
+        pixels[o+2] = pal[3 * col + 2];
+    }
+
+    function updateTimestamp() {
+        timestamp.innerText = new Date(startTime + t).toISOString().slice(0, 19);
     }
 
     while (i < buf.byteLength) {
@@ -117,26 +143,24 @@ async function renderBuf(buf) {
             }
         }
 
-        for (let j = 0; j < count; j ++) {
+        for (let j = 0; j < count; j++) {
             let x = buf[i] + ((buf[i+1]<<8)&0x300);
             let y = (buf[i+1]>>2)+((buf[i+2]<<6)&0x1FF);
             let col = buf[i+2]>>3;
-            set(ox + x, oy + y, col);
+            xor(ox + x, oy + y, col);
             i += 3;
         }
 
         t += to;
 
         if (t - lastSleep > calcSpeed()) {
-            timestamp.innerText = new Date(startTime + t).toISOString().slice(0, 19);
-
+            updateTimestamp();
             dumpImageData();
-
             await sleepFrame();
             lastSleep = t;
         }
     }
-
+    updateTimestamp();
     dumpImageData();
 }
 
@@ -144,7 +168,7 @@ async function grabData() {
     let res, nextRes;
     for (var n = 0; n <= 84; n++) {
         res = nextRes;
-        nextRes = n < 84 ? await fetch('data/events.' + (""+n).padStart(3, "0") + ".bin") : null;
+        nextRes = n < 84 ? await fetch('data/eventsxor.' + (""+n).padStart(3, "0") + ".bin") : null;
         if (!res) continue;
         if (!res.ok) { console.log("bad"); return }
         let buf = new Uint8Array(await (await res.blob()).arrayBuffer());

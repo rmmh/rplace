@@ -94,9 +94,6 @@ func writeEventsBinary() {
 				ox := x + 1000*(s.Quad%2)
 				oy := y + 1000*(s.Quad/2)
 
-				fmt.Printf("%#v\n", si.Palette)
-				panic("lol")
-
 				wc := si.Pix[x+y*1000]
 				sc := state.Pix[ox+oy*2000]
 
@@ -244,6 +241,11 @@ func crunchEventsBinary() {
 
 	writeHeader()
 
+	ocs := make([]uint8, 2000*2000)
+	for i := range ocs {
+		ocs[i] = 31
+	}
+
 	for {
 		n, err := br.Read(buf[:8])
 		if err == io.EOF || n != 8 {
@@ -258,6 +260,9 @@ func crunchEventsBinary() {
 		x := packed & 0x7FF
 		y := (packed >> 11) & 0x7FF
 		oct := x/1000 + 2*(y/500)
+
+		ocs[x+y*2000] ^= uint8(new_color ^ old_color)
+
 		if uint64(timeOffset) != curTs || oct != curOct {
 			writeChunk()
 			curTs = uint64(timeOffset)
@@ -269,7 +274,7 @@ func crunchEventsBinary() {
 			splitStart += *crunchSplit
 		}
 
-		repack := (x % 1000) + (y%500)<<10 + (new_color^old_color^old_color)<<19
+		repack := (x % 1000) | (y%500)<<10 | (new_color^old_color)<<19
 		obuf = append(obuf, byte(repack), byte(repack>>8), byte(repack>>16))
 		obcount++
 	}
