@@ -1,31 +1,31 @@
 <html>
 <head>
-<title>r/Place 2022 Timeline by u/scaevolus</title>
+    <title>r/Place 2022 Timeline by u/scaevolus</title>
 </head>
 <body style="overflow:hidden;margin:0;background-color:black;color:white;">
 <div style="margin:5px;display:flex;">
-<span id="timestamp"></span>&nbsp;<span id="speed" style="width:3em;text-align:center;">5x</span>
-<input id="slider" type="range" min="200" list="steplist" max="400" value="330" style="flex-grow:1;display:inline;">
-<datalist id="steplist">
-    <option>0</option>
-    <option>100</option>
-    <option>200</option>
-    <option>300</option>
-    <option>400</option>
-</datalist>
+    <span id="timestamp"></span>&nbsp;<span id="speed" style="width:3em;text-align:center;">5x</span>
+    <input id="slider" type="range" min="200" list="steplist" max="400" value="330" style="flex-grow:1;display:inline;">
+    <datalist id="steplist">
+        <option>0</option>
+        <option>100</option>
+        <option>200</option>
+        <option>300</option>
+        <option>400</option>
+    </datalist>
 </div>
 <div id="viewport" style="height:100%;user-select:none;overflow:clip">
-<canvas id="canvas" style="image-rendering:pixelated;touch-action:none"  width="2000" height="2000" ondragstart="return false">
-</div>
+    <canvas id="canvas" style="image-rendering:pixelated;touch-action:none"  width="2000" height="2000" ondragstart="return false">
+    </div>
 </body>
 <script type="text/javascript">
 "use strict";
 
 const palette = [
-	"#6D001A", "#BE0039", "#FF4500", "#FFA800", "#FFD635", "#FFF8B8", "#00A368", "#00CC78",
-	"#7EED56", "#00756F", "#009EAA", "#00CCC0", "#2450A4", "#3690EA", "#51E9F4", "#493AC1",
-	"#6A5CFF", "#94B3FF", "#811E9F", "#B44AC0", "#E4ABFF", "#DE107F", "#FF3881", "#FF99AA",
-	"#6D482F", "#9C6926", "#FFB470", "#000000", "#515252", "#898D90", "#D4D7D9", "#FFFFFF",
+"#6D001A", "#BE0039", "#FF4500", "#FFA800", "#FFD635", "#FFF8B8", "#00A368", "#00CC78",
+"#7EED56", "#00756F", "#009EAA", "#00CCC0", "#2450A4", "#3690EA", "#51E9F4", "#493AC1",
+"#6A5CFF", "#94B3FF", "#811E9F", "#B44AC0", "#E4ABFF", "#DE107F", "#FF3881", "#FF99AA",
+"#6D482F", "#9C6926", "#FFB470", "#000000", "#515252", "#898D90", "#D4D7D9", "#FFFFFF",
 ];
 
 const pal = [];
@@ -54,7 +54,7 @@ slider.oninput = function() {
 slider.oninput();
 
 function sleep(ms) {
-   return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function sleepFrame() {
@@ -193,10 +193,10 @@ viewport.onwheel = function(e) {
 
     let oldZoom = zoom;
 
-	zoom = Math.min(10, Math.max(0, Math.sign(e.deltaY) + zoom|0));
-	if (zoom === 0) {
-		zoom = 0.5;
-	}
+    zoom = Math.min(10, Math.max(0, Math.sign(e.deltaY) + zoom|0));
+    if (zoom === 0) {
+        zoom = 0.5;
+    }
 
     if (zoom === oldZoom) {
         return;
@@ -207,8 +207,8 @@ viewport.onwheel = function(e) {
     tx = zoom * (1000 + tx - e.clientX) / oldZoom + e.clientX - 1000;
     ty = zoom * (1000 + ty - e.clientY) / oldZoom + e.clientY - 1000;
 
-	canvas.style["image-rendering"] = zoom < 1 ? 'auto' : 'pixelated';
-	updateTransform();
+    canvas.style["image-rendering"] = zoom < 1 ? 'auto' : 'pixelated';
+    updateTransform();
 }
 
 function updateTransform() {
@@ -218,19 +218,18 @@ function updateTransform() {
     ty = Math.min(ty, viewport.clientHeight - 60 - ((-1000 * zoom) + 1000));
     ty = Math.max(ty, 20 - ((250 * (quadseen & 4) * zoom) + 1000));
 
-	canvas.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + zoom + ")";
+    canvas.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + zoom + ")";
 }
 
 window.onresize = updateTransform;
 
 viewport.onmousemove = function(e) {
-	if (e.buttons) {
-		tx += e.movementX;
-		ty += e.movementY;
-		updateTransform();
-	}
+    if (e.buttons) {
+        tx += e.movementX;
+        ty += e.movementY;
+        updateTransform();
+    }
 }
 updateTransform();
-
 </script>
 </html>
