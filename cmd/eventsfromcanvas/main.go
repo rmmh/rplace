@@ -206,7 +206,7 @@ func crunchEventsBinary() {
 		if splitN > 0 {
 			w.Close()
 		}
-		w, err = os.Create(fmt.Sprintf("%s.%03d", *outFile, splitN))
+		w, err = os.Create(fmt.Sprintf("%s.%03d.bin", *outFile, splitN))
 		if err != nil {
 			log.Fatal(err)
 		}

@@ -1,0 +1,166 @@
+<html>
+<head>
+<title>r/Place 2022 Timeline by u/scaevolus</title>
+</head>
+<body style="overflow:hidden;margin:0;background-color:black;color:white;">
+<div style="margin:5px;display:flex;">
+<span id="timestamp"></span>&nbsp;<span id="speed">5x</span></output><input id="slider" type="range" min="50" max="200" value="130" style="flex-grow:1;display:inline;">
+</div>
+<div id="viewport" style="height:100%;user-select:none;overflow:clip">
+<canvas id="canvas" style="image-rendering:pixelated;touch-action:none" width="2000" height="2000" ondragstart="return false">
+</div>
+</body>
+<script type="text/javascript">
+"use strict";
+
+const palette = [
+	"#6D001A", "#BE0039", "#FF4500", "#FFA800", "#FFD635", "#FFF8B8", "#00A368", "#00CC78",
+	"#7EED56", "#00756F", "#009EAA", "#00CCC0", "#2450A4", "#3690EA", "#51E9F4", "#493AC1",
+	"#6A5CFF", "#94B3FF", "#811E9F", "#B44AC0", "#E4ABFF", "#DE107F", "#FF3881", "#FF99AA",
+	"#6D482F", "#9C6926", "#FFB470", "#000000", "#515252", "#898D90", "#D4D7D9", "#FFFFFF",
+];
+
+function calcSpeed() {
+    return Math.pow(2, slider.value/10);
+}
+
+slider.oninput = function() {
+    speed.innerText = ("" + (60*calcSpeed()/1000)|0) + "x";
+}
+
+function sleep(ms) {
+   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function sleepFrame() {
+    return new Promise(requestAnimationFrame);
+}
+
+let quadseen = 0;
+
+async function renderBuf(buf) {
+    let magic = new TextDecoder().decode(buf.slice(0,8));
+    if (magic !== "PIXLPACK") {
+        console.log('bad magic', magic);
+        return;
+    }
+
+    buf = buf.slice(8);
+
+    let startTime = buf[0]|(buf[1]<<8)|(buf[2]<<16);
+    let startTimeHi = buf[3]|(buf[4]<<8)|(buf[5]<<16);
+    startTime = (startTime) + (startTimeHi*16777216);
+
+    let i = 8;
+    let t = 0;
+
+    function readUvarint() {
+        let x = 0;
+        let s = 0;
+        while (1) {
+            let c = buf[i++];
+            x |= (c & 127) << s;
+            if (!(c & 128)) {
+                break;
+            }
+            s += 7;
+        }
+        return x;
+    }
+
+    let ctx = canvas.getContext('2d');
+
+    let d = 0;
+
+    let lastSleep = 0;
+
+    while (i < buf.byteLength) {
+        let to = readUvarint();
+        let ocount = readUvarint();
+        let count = ocount >> 3;
+        let oct = ocount & 7;
+        let ox = 1000 * (oct & 1);
+        let oy = 250 * (oct & 6);
+
+        let quad = (oct&1)+((oct&4)>>1);
+
+        if (!(quadseen & (1<<quad))) {
+            quadseen |= 1 << quad;
+            ctx.fillStyle = "white";
+            ctx.fillRect(1000 * (quad & 1), 1000 * (quad >> 1), 1000, 1000);
+        }
+
+        for (let j = 0; j < count; j ++) {
+            let x = buf[i] + ((buf[i+1]<<8)&0x300);
+            let y = (buf[i+1]>>2)+((buf[i+2]<<6)&0x1FF);
+            let col = buf[i+2]>>3;
+            ctx.fillStyle = palette[col];
+            ctx.fillRect(ox + x, oy + y, 1, 1);
+            i += 3;
+        }
+
+        d += count;
+
+        t += to;
+
+        if (t - lastSleep > calcSpeed()) {
+            timestamp.innerText = new Date(startTime + t).toISOString().slice(0, 19);
+            await sleepFrame();
+            d = 0;
+            lastSleep = t;
+        }
+    }
+}
+
+async function grabData() {
+    let res, nextRes;
+    for (var n = 0; n <= 84; n++) {
+        res = nextRes;
+        nextRes = n < 84 ? await fetch('data/events.' + (""+n).padStart(3, "0") + ".bin") : null;
+        if (!res) continue;
+        if (!res.ok) { console.log("bad"); return }
+        let buf = new Uint8Array(await (await res.blob()).arrayBuffer());
+        await renderBuf(buf);
+    }
+}
+grabData();
+
+var lastUpdate = 0;
+function updateImage() {
+    let ctx = canvas.getContext('2d');
+    for (let i = 0; i < 100; i++) {
+        break;
+        let x = (Math.random() * 2000)|0;
+        let y = (Math.random() * 2000)|0;
+        ctx.fillStyle=palette[Math.random()*32|0];
+        ctx.fillRect(x, y, 1, 1);
+    }
+}
+
+var zoom=1;
+
+viewport.onwheel = function(e) {
+	zoom = Math.min(10, Math.max(0, Math.sign(e.deltaY) + zoom|0));
+	if (zoom === 0) {
+		zoom = 0.5;
+	}
+	canvas.style["image-rendering"] = zoom < 1 ? 'auto' : 'pixelated';
+	updateTransform();
+}
+
+function updateTransform() {
+	canvas.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + zoom + ")";
+}
+
+var tx = 0, ty = 0;
+viewport.onmousemove = function(e) {
+	if (e.buttons) {
+		tx = Math.min(2000, Math.max(-3000, tx + e.movementX));
+		ty = Math.min(2000, Math.max(-3000, ty + e.movementY));
+		updateTransform();
+	}
+}
+updateTransform();
+
+</script>
+</html>
