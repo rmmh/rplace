@@ -71,8 +71,14 @@ func (s *server) fullHandler(w http.ResponseWriter, r *http.Request) {
 		width = 2000
 		height = 2000
 	}
+
+	if r.URL.Query().Has("full") {
+		width = 2000
+		height = 2000
+	}
+
 	var out *image.Paletted
-	if len(ims) == 1 {
+	if width == 1000 && height == 1000 {
 		out = ims[0]
 	} else {
 		out = image.NewPaletted(image.Rect(0, 0, width, height), ims[0].Palette)
@@ -198,14 +204,16 @@ func main() {
 	fname := filepath.Join(*dataDir, "canvas_full.zip")
 	dname := filepath.Join(*dataDir, "canvas_delta.zip")
 	tname := filepath.Join(*dataDir, "canvas_ticks.zip")
-	if _, err := os.Stat(dname); !os.IsNotExist(err) {
+	if _, err := os.Stat(dname); err != nil && !os.IsNotExist(err) {
 		dname = ""
 		tname = ""
 	} else {
-		if _, err := os.Stat("canvas_ticks.zip"); os.IsNotExist(err) {
+		if _, err := os.Stat(tname); err != nil && os.IsNotExist(err) {
 			tname = ""
 		}
 	}
+
+	log.Println(fname, dname, tname)
 
 	dr, err := delta.MakeDeltaReader(fname, dname, tname)
 	if err != nil {

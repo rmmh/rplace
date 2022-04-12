@@ -11,20 +11,33 @@ import (
 	"sync"
 )
 
-func ApplyDelta(base, delta *image.Paletted) *image.Paletted {
-	if !base.Rect.Eq(delta.Rect) {
-		panic("applying delta onto wrong-sized base")
+type SimpleCache[K comparable, V any] struct {
+	cap int
+	i   int
+	k   []K
+	m   map[K]V
+}
+
+func NewSimpleCache[K comparable, V any](size int) *SimpleCache[K, V] {
+	return &SimpleCache[K, V]{
+		cap: size,
+		k:   make([]K, size),
+		m:   make(map[K]V),
 	}
-	combined := image.NewPaletted(base.Rect, base.Palette)
-	copy(combined.Pix, base.Pix)
-	for y := 0; y < delta.Rect.Max.Y; y++ {
-		for x := 0; x < delta.Rect.Max.X; x++ {
-			if ci := delta.ColorIndexAt(x, y); ci > 0 {
-				combined.SetColorIndex(x, y, ci-1)
-			}
-		}
+}
+
+func (s *SimpleCache[K, V]) Get(k K) (V, bool) {
+	v, ok := s.m[k]
+	return v, ok
+}
+
+func (s *SimpleCache[K, V]) Put(k K, v V) {
+	if len(s.m) >= s.cap {
+		delete(s.m, s.k[s.i])
+		s.i = (s.i + 1) % s.cap
 	}
-	return combined
+	s.k[(s.i+len(s.m))%s.cap] = k
+	s.m[k] = v
 }
 
 type DeltaReaderEntry struct {
@@ -51,6 +64,8 @@ type DeltaReader struct {
 	Files            [4][]DeltaReaderEntry
 	FileMap          [4]map[int]DeltaReaderEntry
 	L                sync.Mutex
+
+	c *SimpleCache[int, *image.Paletted]
 }
 
 func MakeDeltaReader(full, delta, ticks string) (*DeltaReader, error) {
@@ -72,7 +87,9 @@ func MakeDeltaReader(full, delta, ticks string) (*DeltaReader, error) {
 		}
 	}
 
-	d := &DeltaReader{fzip: fzip, dzip: dzip, tzip: tzip}
+	d := &DeltaReader{fzip: fzip, dzip: dzip, tzip: tzip,
+		c: NewSimpleCache[int, *image.Paletted](128),
+	}
 	for i := 0; i < 4; i++ {
 		d.FileMap[i] = make(map[int]DeltaReaderEntry)
 	}
@@ -95,14 +112,17 @@ func MakeDeltaReader(full, delta, ticks string) (*DeltaReader, error) {
 			Quad: quad,
 			F:    f,
 		}
-		if len(comps) >= 3 {
-			m.Base, err = strconv.Atoi(comps[2])
+		if len(comps) == 4 {
+			m.Base, err = strconv.Atoi(comps[3])
 			if err != nil {
 				return err
 			}
-		}
-		if len(comps) == 4 {
-			m.Delta, err = strconv.Atoi(comps[3])
+			m.Delta, err = strconv.Atoi(comps[2])
+			if err != nil {
+				return err
+			}
+		} else if len(comps) >= 3 {
+			m.Base, err = strconv.Atoi(comps[2])
 			if err != nil {
 				return err
 			}
@@ -172,6 +192,25 @@ func (d *DeltaReader) FindNearestLeft(ts, quad int) *DeltaReaderEntry {
 	return &fs[ind]
 }
 
+func (d *DeltaReader) GetImageRaw(e DeltaReaderEntry) (*image.Paletted, error) {
+	// lock must be held
+	k := e.Ts<<2 + e.Quad
+	im, ok := d.c.Get(k)
+	if ok {
+		return im, nil
+	}
+
+	im, err := e.Read()
+	if err != nil {
+		return nil, err
+	}
+
+	d.c.Put(k, im)
+
+	return im, nil
+}
+
+// GetImage gets an image with deltas applied.
 func (d *DeltaReader) GetImage(e *DeltaReaderEntry) (*image.Paletted, error) {
 	d.L.Lock()
 	defer d.L.Unlock()
@@ -182,19 +221,39 @@ func (d *DeltaReader) GetImage(e *DeltaReaderEntry) (*image.Paletted, error) {
 	}
 
 	if e.Base != 0 {
-		b, err := d.FileMap[e.Quad][e.Base].Read()
+		b, err := d.GetImageRaw(d.FileMap[e.Quad][e.Base])
 		if err != nil {
 			return nil, err
 		}
 		if e.Delta != 0 {
-			d, err := d.FileMap[e.Quad][e.Delta].Read()
+			d, err := d.GetImageRaw(d.FileMap[e.Quad][e.Delta])
 			if err != nil {
 				return nil, err
 			}
-			b = ApplyDelta(d, b)
+			b = ApplyDelta(b, d)
 		}
 		im = ApplyDelta(b, im)
 	}
 
 	return im, nil
+}
+
+var imagePool sync.Pool
+
+func FreeImage(i *image.Paletted) {
+	imagePool.Put(i)
+}
+
+func ApplyDelta(base, delta *image.Paletted) *image.Paletted {
+	if !base.Rect.Eq(delta.Rect) {
+		panic("applying delta onto wrong-sized base")
+	}
+	combined := image.NewPaletted(base.Rect, base.Palette)
+	copy(combined.Pix, base.Pix)
+	for i := 0; i < len(delta.Pix); i++ {
+		if ci := delta.Pix[i]; ci > 0 {
+			combined.Pix[i] = ci - 1
+		}
+	}
+	return combined
 }

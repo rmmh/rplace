@@ -64,6 +64,8 @@ func imhash(im image.Image) string {
 }
 
 func computeDelta(base, target *image.Paletted) *image.Paletted {
+	// TODO: this palette is wasteful: the base palette *already* has 0 as the
+	// transparent color, but there's a fair amount of data to fix.
 	delta := image.NewPaletted(image.Rect(0, 0, 1000, 1000), append(color.Palette{color.Transparent}, base.Palette...))
 	for y := 0; y < 1000; y++ {
 		for x := 0; x < 1000; x++ {
