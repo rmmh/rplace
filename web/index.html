@@ -36,6 +36,8 @@ for (let c of palette) {
     pal.push(parseInt(c.slice(5, 7), 16));
 }
 
+let speed = 0;
+
 function calcSpeed() {
     let val = slider.value/10;
     if (17 < val && val < 23) {
@@ -48,8 +50,9 @@ function calcSpeed() {
 }
 
 slider.oninput = function() {
-    let s = 60*calcSpeed()/1000;
-    speed.innerText = ("" + (s>1||s<-1?s|0:Math.round(s*100)/100)) + "x";
+    speed = calcSpeed();
+    let s = 60*speed/1000;
+    document.getElementById("speed").innerText = ("" + (s>1||s<-1?s|0:Math.round(s*100)/100)) + "x";
 }
 slider.oninput();
 
@@ -68,43 +71,18 @@ for (let i = 0; i < pixelsPaletted.length; i++) {
     pixelsPaletted[i] = 31; // white
 }
 
-async function renderBuf(buf) {
-    let magic = new TextDecoder().decode(buf.slice(0,8));
-    if (magic !== "PIXLPACK") {
-        console.log('bad magic', magic);
-        return;
-    }
+function updateTimestamp() {
+    timestamp.innerText = new Date(startTime + curTs).toISOString().slice(0, 19);
+}
 
-    buf = buf.slice(8);
-
-    let startTime = buf[0]|(buf[1]<<8)|(buf[2]<<16);
-    let startTimeHi = buf[3]|(buf[4]<<8)|(buf[5]<<16);
-    startTime = (startTime) + (startTimeHi*16777216);
-
-    let i = 8;
-    let t = 0;
-
-    function readUvarint() {
-        let x = 0;
-        let s = 0;
-        while (1) {
-            let c = buf[i++];
-            x |= (c & 127) << s;
-            if (!(c & 128)) {
-                break;
-            }
-            s += 7;
-        }
-        return x;
-    }
-
+async function renderLoop() {
     let ctx = canvas.getContext('2d');
 
     let imageData = ctx.getImageData(0, 0, 2000, 2000);;
     let pixels = imageData.data;
 
     function dumpImageData() {
-        ctx.putImageData(imageData, 0, 0);
+        ctx.putImageData(imageData, 0, 0, 0, 0, 1000 + 500 * (quadseen & 2), 1000 + 250 * (quadseen & 4));
     }
 
     let lastSleep = 0;
@@ -125,15 +103,50 @@ async function renderBuf(buf) {
         pixels[o+2] = pal[3 * col + 2];
     }
 
-    function updateTimestamp() {
-        timestamp.innerText = new Date(startTime + t).toISOString().slice(0, 19);
+    function desaturate() {
+        let f = 0.04; // desaturate by 10%
+
+        for (let i = 0; i < pixels.length; i += 4) {
+            let r = pixels[i], g = pixels[i+1], b = pixels[i + 2];
+            // https://stackoverflow.com/a/20820649/3694
+            let L = r * 0.3 + g * 0.6 + b * .1;
+
+            pixels[i] = r + f * (L - r);
+            pixels[i+1] = g + f * (L - g);
+            pixels[i+2] = b + f * (L - b);
+        }
     }
 
-    while (i < buf.byteLength) {
-        let to = readUvarint();
-        let ocount = readUvarint();
-        let count = ocount >> 3;
-        let oct = ocount & 7;
+
+    while (true) {
+        let next = nextEvent();
+        if (!next) {
+            await loadNextBuf();
+            next = nextEvent();
+        }
+        if (!next) {
+            console.log("error?");
+        }
+        let [ts, count, oct, buf] = next;
+
+        if (count === 0) {
+            console.log("end?");
+            return;
+        }
+
+        if (ts < lastSleep) {
+            console.log("loop");
+            // clear canvas
+            for (let o = 0; o < pixels.length; o += 4) {
+                pixels[o] = 0;
+                pixels[o+1] = 0;
+                pixels[o+2] = 0;
+            }
+            updateTimestamp();
+            dumpImageData();
+            quadseen = 0;
+        }
+
         let ox = 1000 * (oct & 1);
         let oy = 250 * (oct & 6);
 
@@ -150,6 +163,8 @@ async function renderBuf(buf) {
             }
         }
 
+        let i = 0;
+
         for (let j = 0; j < count; j++) {
             let x = buf[i] + ((buf[i+1]<<8)&0x300);
             let y = (buf[i+1]>>2)+((buf[i+2]<<6)&0x1FF);
@@ -158,31 +173,129 @@ async function renderBuf(buf) {
             i += 3;
         }
 
-        t += to;
-
-        if (t - lastSleep > calcSpeed()) {
+        if (ts < lastSleep || ts - lastSleep > speed) {
             updateTimestamp();
             dumpImageData();
+            // desaturate();
             await sleepFrame();
-            lastSleep = t;
+            lastSleep = ts;
         }
     }
     updateTimestamp();
     dumpImageData();
 }
 
-async function grabData() {
-    let res, nextRes;
-    for (var n = 0; n <= 84; n++) {
-        res = nextRes;
-        nextRes = n < 84 ? await fetch('data/eventsxor.' + (""+n).padStart(3, "0") + ".bin") : null;
-        if (!res) continue;
-        if (!res.ok) { console.log("bad"); return }
-        let buf = new Uint8Array(await (await res.blob()).arrayBuffer());
-        await renderBuf(buf);
+const N_BUFS = 84;
+let bufs = [];
+let groupLengths = [];
+let curBuf = 0;
+let curEvent = 0;
+let curIndex = 0;
+let curTs = 0;
+let startTime = 0;
+
+async function loadNextBuf(dir) {
+    function startFetch(n) {
+        bufs[n] = fetch('data/eventsxor.' + (""+n).padStart(3, "0") + ".bin");
+    }
+
+    if (bufs[curBuf] === null) {
+        startFetch(curBuf);
+    }
+    if (bufs[curBuf] instanceof Promise) {
+        bufs[curBuf] = await bufs[curBuf];
+    }
+    if (bufs[curBuf] instanceof Response) {
+        if (!bufs[curBuf].ok) {
+            console.log("bad");
+            bufs[curBuf] = false;
+            return;
+        }
+        bufs[curBuf] = new Uint8Array(await (await bufs[curBuf].blob()).arrayBuffer())
+    }
+    if (!bufs[curBuf] instanceof Uint8Array) {
+        console.log("weird buffer?", curBuf);
+        return;
+    }
+
+    if (curBuf + 1 < N_BUFS && bufs[curBuf + 1] === null) {
+        startFetch(curBuf + 1);
+    }
+    if (curBuf + 2 < N_BUFS && bufs[curBuf + 2] === null) {
+        startFetch(curBuf + 2);
     }
 }
-grabData();
+
+function nextEvent(dir) {
+    let buf = bufs[curBuf];
+
+    if (!(buf instanceof Uint8Array)) {
+        return;
+    }
+
+    if (!groupLengths[curBuf]) {
+        let magic = new TextDecoder().decode(buf.slice(0,8));
+        if (magic !== "PIXLPACK") {
+            console.log('bad magic', magic);
+            return;
+        }
+
+        let startTime = buf[0]|(buf[1]<<8)|(buf[2]<<16);
+        let startTimeHi = buf[3]|(buf[4]<<8)|(buf[5]<<16);
+        startTime = (startTime) + (startTimeHi*16777216);
+
+        groupLengths[curBuf] = new Uint16Array(buf.length/30|0);
+
+        curIndex = 16;
+    }
+
+    function readUvarint() {
+        let x = 0;
+        let s = 0;
+        while (1) {
+            let c = buf[curIndex++];
+            x |= (c & 127) << s;
+            if (!(c & 128)) {
+                break;
+            }
+            s += 7;
+        }
+        return x;
+    }
+
+    if (curIndex < buf.byteLength) {
+        let start = curIndex;
+        let to = readUvarint();
+        let ocount = readUvarint();
+        let count = ocount >> 3;
+        let oct = ocount & 7;
+
+        if (curEvent > groupLengths[curBuf].length) {
+            console.log("woops", curEvent, curBuf, groupLengths[curBuf].length);
+        }
+        groupLengths[curBuf][curEvent++] = (curIndex - start) + 3 * count;
+
+        curTs += to;
+        curIndex += count * 3;
+
+        return [curTs, count, oct, buf.subarray(curIndex - count * 3, curIndex)];
+    }
+
+    curBuf = (curBuf + 1) % N_BUFS;
+    curEvent = 0;
+    curIndex = 16;
+    curTs = 0;
+}
+
+
+for (var i = 0; i < N_BUFS; i++) {
+    bufs.push(null);
+    groupLengths.push(null);
+}
+
+renderLoop();
+
+// PAN/ZOOM
 
 var zoom = 1;
 var tx = 0, ty = 0;
