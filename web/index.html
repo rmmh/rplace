@@ -4,8 +4,12 @@
 </head>
 <body style="overflow:hidden;margin:0;background-color:black;color:white;">
 <div style="margin:5px;display:flex;">
-    <span id="timestamp"></span>&nbsp;<span id="speed" style="width:3em;text-align:center;">5x</span>
-    <input id="slider" type="range" min="0" list="steplist" max="400" value="330" style="flex-grow:1;display:inline;" draggable="false">
+    <span id="timestamp"></span>&nbsp;<br>
+    <input id="timeslider" type="range" min="1648817050351" max="1649116960220" value="0" style="flex-grow:1;display:inline;" draggable="false">
+</div>
+<div style="margin:5px;display:flex;">
+    <span id="speed" style="width:5em;text-align:center;">5x</span>
+    <input id="speedslider" type="range" min="0" list="steplist" max="400" value="330" style="flex-grow:1;display:inline;" draggable="false">
     <datalist id="steplist">
         <option>0</option>
         <option>100</option>
@@ -40,7 +44,7 @@ let speed = 1;
 let speedticks = 0;
 
 function calcSpeed() {
-    let val = slider.value/10;
+    let val = speedslider.value/10;
     speedticks = 0;
     if (18 < val && val < 22) {
         return 0;
@@ -51,13 +55,74 @@ function calcSpeed() {
     }
 }
 
-slider.oninput = function() {
+speedslider.oninput = function() {
     let newSpeed = calcSpeed();
     speed = newSpeed;
     let s = 60*speed/1000;
     document.getElementById("speed").innerText = ("" + (s>1||s<-1?s|0:Math.round(s*100)/100)) + "x";
 }
-slider.oninput();
+speedslider.oninput();
+
+let jumpTarget = 0;
+
+// getting the next event is an asynchronous operation
+let nextEventLock = 0; // 0 = unheld, 1 = normal playback, 2 = jumping
+
+async function doJump() {
+    while (nextEventLock) {
+        if (nextEventLock == 2) {
+            return;
+        }
+        await sleepFrame();
+    }
+    nextEventLock = 2;
+
+    let lastDump = +new Date();
+    let ospeed = speed;
+    speed = jumpTarget < curTs ? -1 : 1;
+
+    console.log("JUMP START", jumpTarget, curTs, curGroup, speed);
+
+    while (speed < 0 ? jumpTarget < curTs : jumpTarget > curTs) {
+        if (speed !== 1 && speed !== -1) {
+            ospeed = speed;   // adjusted speed during jump!
+        }
+        speed = jumpTarget < curTs ? -1 : 1;
+
+        let next = nextEvent();
+
+        if (!next) {
+            if (new Date() - lastDump > 200) {
+                dumpImageData();
+                updateTimestamp();
+                lastDump = +new Date();
+                await sleepFrame();
+            }
+            await loadNextBuf();
+            next = nextEvent();
+            if (!next) {
+                console.log("NEXTFAILED");
+                break;
+            }
+        }
+
+        let {count, oct, evtStart} = next;
+        applyGroup(count, oct, evtStart);
+    }
+
+    console.log("JUMP END", jumpTarget, curTs, curGroup, speed, ospeed);
+
+    dumpImageData();
+    updateTimestamp();
+
+    speed = ospeed;
+    nextEventLock = 0;
+}
+
+timeslider.oninput = async function(e) {
+    jumpTarget = +e.target.value - startTime;
+    await doJump();
+}
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -85,26 +150,25 @@ async function pixelsHash() {
     return buf2hex(await crypto.subtle.digest("SHA-1", pixelsPaletted));
 }
 
-function updateTimestamp() {
+function updateTimestamp(skipSlider) {
     timestamp.innerText = new Date(startTime + curTs).toISOString().slice(0, 19);
+    timeslider.value = "" + (startTime + curTs);
 }
 
-async function renderLoop() {
-    let ctx = canvas.getContext('2d');
+let ctx = canvas.getContext('2d');
 
-    let imageData = ctx.getImageData(0, 0, 2000, 2000);;
-    let pixels = imageData.data;
+let imageData = ctx.getImageData(0, 0, 2000, 2000);;
+let pixels = imageData.data;
 
-    function dumpImageData(all) {
-        if (all) {
-            ctx.putImageData(imageData, 0, 0);
-        } else {
-            ctx.putImageData(imageData, 0, 0, 0, 0, 1000 + 500 * (quadseen & 2), 1000 + 250 * (quadseen & 4));
-        }
+function dumpImageData(all) {
+    if (all) {
+        ctx.putImageData(imageData, 0, 0);
+    } else {
+        ctx.putImageData(imageData, 0, 0, 0, 0, 1000 + 500 * (quadseen & 2), 1000 + 250 * (quadseen & 4));
     }
+}
 
-    let lastSleep = 0;
-
+function applyGroup(count, oct, i) {
     function set(x, y, col) {
         let o = 4 * (x + y * 2000);
         pixels[o+0] = pal[3 * col];
@@ -121,6 +185,67 @@ async function renderLoop() {
         pixels[o+2] = pal[3 * col + 2];
     }
 
+    let ox = 1000 * (oct & 1);
+    let oy = 250 * (oct & 6);
+
+    let quad = (oct&1)+((oct&4)>>1);
+
+    if (curGroup === 1 && speed > 0) {
+        // clear canvas
+        for (let o = 0; o < pixels.length; o += 4) {
+            pixels[o] = 0;
+            pixels[o+1] = 0;
+            pixels[o+2] = 0;
+        }
+        updateTimestamp();
+        dumpImageData();
+        quadseen = 0;
+    }
+
+    if (!(quadseen & (1<<quad))) {
+        quadstart[quad] ||= curGroup;
+        quadseen |= 1 << quad;
+
+        let sx = 1000 * (quad & 1), sy = 1000 * (quad >> 1);
+
+        console.log("fwd-white-quad", quad, curGroup, sx, sy, quadstart[quad]);
+        for (let y = sy; y < sy + 1000; y++) {
+            for (let x = sx; x < sx + 1000; x++) {
+                set(x, y, 31);
+            }
+        }
+    }
+
+    for (let cq = 1; speed < 0 && cq < 4; cq++) {
+        if (quadstart[cq] != curGroup + 2) {
+            continue;
+        }
+
+        let sx = 1000 * (cq & 1), sy = 1000 * (cq >> 1);
+
+        console.log("rev-black-quad", cq, curGroup, sx, sy);
+
+        for (let y = sy; y < sy + 1000; y++) {
+            for (let x = sx; x < sx + 1000; x++) {
+                set(x, y, 27);
+            }
+        }
+        dumpImageData(true);
+        quadseen ^= 1 << cq;
+    }
+
+    for (let j = 0; j < count; j++) {
+        let x = buf[i] + ((buf[i+1]<<8)&0x300);
+        let y = (buf[i+1]>>2)+((buf[i+2]<<6)&0x1FF);
+        let col = buf[i+2]>>3;
+        xor(ox + x, oy + y, col);
+        i += 3;
+    }
+}
+
+async function renderLoop() {
+    let lastSleep = 0;
+
     function desaturate() {
         let f = 0.04; // desaturate by 10%
 
@@ -135,8 +260,14 @@ async function renderLoop() {
         }
     }
 
-
     while (true) {
+        while (nextEventLock || speed === 0) {
+            // seek operation in progress
+            await sleepFrame();
+        }
+
+        nextEventLock = 1;
+
         let next = nextEvent();
         while (!next) {
             await loadNextBuf();
@@ -146,71 +277,14 @@ async function renderLoop() {
             }
         }
 
-        let {count, oct, buf, evtStart} = next;
-
-        let i = evtStart;
+        let {count, oct, evtStart} = next;
 
         if (count === 0) {
             console.log("end?");
             return;
         }
 
-        let ox = 1000 * (oct & 1);
-        let oy = 250 * (oct & 6);
-
-        let quad = (oct&1)+((oct&4)>>1);
-
-        if (curGroup === 1 && speed > 0) {
-            // clear canvas
-            for (let o = 0; o < pixels.length; o += 4) {
-                pixels[o] = 0;
-                pixels[o+1] = 0;
-                pixels[o+2] = 0;
-            }
-            updateTimestamp();
-            dumpImageData();
-            quadseen = 0;
-        }
-
-        if (!(quadseen & (1<<quad))) {
-            quadstart[quad] ||= curGroup;
-            quadseen |= 1 << quad;
-
-            let sx = 1000 * (quad & 1), sy = 1000 * (quad >> 1);
-
-            console.log("fwd-white-quad", quad, curGroup, sx, sy, quadstart[quad]);
-            for (let y = sy; y < sy + 1000; y++) {
-                for (let x = sx; x < sx + 1000; x++) {
-                    set(x, y, 31);
-                }
-            }
-        }
-
-        for (let cq = 1; speed < 0 && cq < 4; cq++) {
-            if (quadstart[cq] != curGroup + 2) {
-                continue;
-            }
-
-            let sx = 1000 * (cq & 1), sy = 1000 * (cq >> 1);
-
-            console.log("rev-black-quad", cq, curGroup, sx, sy);
-
-            for (let y = sy; y < sy + 1000; y++) {
-                for (let x = sx; x < sx + 1000; x++) {
-                    set(x, y, 27);
-                }
-            }
-            dumpImageData(true);
-            quadseen ^= 1 << cq;
-        }
-
-        for (let j = 0; j < count; j++) {
-            let x = buf[i] + ((buf[i+1]<<8)&0x300);
-            let y = (buf[i+1]>>2)+((buf[i+2]<<6)&0x1FF);
-            let col = buf[i+2]>>3;
-            xor(ox + x, oy + y, col);
-            i += 3;
-        }
+        applyGroup(count, oct, evtStart);
 
         if (0 && curGroup % 100000 < 2) {
             let h = await pixelsHash();
@@ -224,6 +298,8 @@ async function renderLoop() {
                 speed = -1000;
             }
         }
+
+        nextEventLock = 0;
 
         if (Math.abs(curTs - lastSleep) > Math.abs(speed)) {
             updateTimestamp();
@@ -253,7 +329,8 @@ let bufs = [];
 let groupOffsets = new Uint32Array(5542546);
 let groupHashes = {};
 let curGroup = 0;
-let curBuf = 0;
+let bufN = 0;
+let buf;
 let curIndex = 0;
 let curTs = 0;
 let startTime = 0;
@@ -262,37 +339,34 @@ async function loadNextBuf(dir) {
     function startFetch(n) {
         bufs[n] = fetch('data/eventsxor.' + (""+n).padStart(3, "0") + ".bin");
     }
-
-    if (bufs[curBuf] === null) {
-        startFetch(curBuf);
+    if (bufs[bufN] === null) {
+        startFetch(bufN);
     }
-    if (bufs[curBuf] instanceof Promise) {
-        bufs[curBuf] = await bufs[curBuf];
-    }
-    if (bufs[curBuf] instanceof Response) {
-        if (!bufs[curBuf].ok) {
+    if (bufs[bufN] instanceof Promise) {
+        let res = await bufs[bufN];
+        if (!res.ok) {
             console.log("bad");
-            bufs[curBuf] = false;
+            bufs[bufN] = false;
             return;
         }
-        bufs[curBuf] = new Uint8Array(await (await bufs[curBuf].blob()).arrayBuffer())
+        bufs[bufN] = new Uint8Array(await (await res.blob()).arrayBuffer());
     }
-    if (!bufs[curBuf] instanceof Uint8Array) {
-        console.log("weird buffer?", curBuf);
+    if (!bufs[bufN] instanceof Uint8Array) {
+        console.log("weird buffer?", bufN);
         return;
     }
 
-    if (curBuf + 1 < N_BUFS && bufs[curBuf + 1] === null) {
-        startFetch(curBuf + 1);
+    if (bufN + 1 < N_BUFS && bufs[bufN + 1] === null) {
+        startFetch(bufN + 1);
     }
-    if (curBuf + 2 < N_BUFS && bufs[curBuf + 2] === null) {
-        startFetch(curBuf + 2);
+    if (bufN + 2 < N_BUFS && bufs[bufN + 2] === null) {
+        startFetch(bufN + 2);
     }
 }
 
 function nextEvent() {
-    if (curBuf === -1 && speed > 0) {
-        curBuf = 0;
+    if (bufN === -1 && speed > 0) {
+        bufN = 0;
         curIndex = 16;
         curGroup = 0;
         curTs = 0;
@@ -301,13 +375,13 @@ function nextEvent() {
     if (speed < 0) {
         curIndex = groupOffsets[curGroup-1] >>> 7;
         let newBuf = groupOffsets[curGroup-1] & 0x7f;
-        if (newBuf !== curBuf) {
-            curBuf = newBuf;
-            curTs = bufs[curBuf].lastTs;
+        if (newBuf !== bufN) {
+            bufN = newBuf;
+            curTs = bufs[bufN].lastTs;
         }
     }
 
-    let buf = bufs[curBuf];
+    buf = bufs[bufN];
 
     if (!(buf instanceof Uint8Array)) {
         return;
@@ -325,7 +399,6 @@ function nextEvent() {
         startTime = buf[8]|(buf[9]<<8)|(buf[10]<<16);
         let startTimeHi = buf[11]|(buf[12]<<8)|(buf[13]<<16);
         startTime = (startTime) + (startTimeHi*16777216);
-
         curIndex = 16;
     }
 
@@ -353,12 +426,17 @@ function nextEvent() {
         let evtStart = curIndex, evtEnd = curIndex + count * 3;
 
         if (speed > 0) {
-            curTs += to;
-            groupOffsets[curGroup] = (start << 7) | curBuf;
+            if (start === 16) {
+                curTs = to;
+            } else {
+                curTs += to;
+            }
+            groupOffsets[curGroup] = (start << 7) | bufN;
             curIndex += count * 3;
             curGroup++;
         } else {
-            curTs -= to;
+            if (start > 16)
+                curTs -= to;
             curGroup--;
             curIndex = start;
         }
@@ -367,32 +445,31 @@ function nextEvent() {
             throw "group too long?";
         }
 
-        return {count, oct, buf, evtStart};
+        return {count, oct, evtStart};
     }
 
     if (speed > 0) {
         buf.lastTs = curTs;
-        curBuf = (curBuf + 1) % N_BUFS;
-        if (curBuf <= 0) {
+        bufN = (bufN + 1) % N_BUFS;
+        if (bufN <= 0) {
             curGroup = 0;
+            curTs = 0;
         }
         curIndex = 16;
-        curTs = 0;
     } else {
-        curBuf = curBuf - 1;
-        if (curBuf < 0) {
+        bufN = bufN - 1;
+        if (bufN < 0) {
             if (bufs[N_BUFS - 1]) {
-                curBuf = N_BUFS - 1;
+                bufN = N_BUFS - 1;
                 curGroup = groupOffsets.length - 1;
                 curIndex = groupOffsets[curGroup] >>> 7;
-                curBuf = groupOffsets[curGroup] & 0x7f;
-                curTs = bufs[curBuf].lastTs;
+                bufN = groupOffsets[curGroup] & 0x7f;
+                curTs = bufs[bufN].lastTs;
                 quadseen = 0;
             } else {
                 return;
             }
         }
-        curTs = bufs[curBuf].lastTs;
     }
 }
 
