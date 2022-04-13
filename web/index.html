@@ -5,7 +5,7 @@
 <body style="overflow:hidden;margin:0;background-color:black;color:white;">
 <div style="margin:5px;display:flex;">
     <span id="timestamp"></span>&nbsp;<span id="speed" style="width:3em;text-align:center;">5x</span>
-    <input id="slider" type="range" min="200" list="steplist" max="400" value="330" style="flex-grow:1;display:inline;">
+    <input id="slider" type="range" min="0" list="steplist" max="400" value="330" style="flex-grow:1;display:inline;">
     <datalist id="steplist">
         <option>0</option>
         <option>100</option>
@@ -65,6 +65,7 @@ function sleepFrame() {
 }
 
 let quadseen = 0;
+let quadstart = [0, 0, 0, 0];
 
 let pixelsPaletted = new Uint8Array(2000*2000);
 for (let i = 0; i < pixelsPaletted.length; i++) {
@@ -81,8 +82,12 @@ async function renderLoop() {
     let imageData = ctx.getImageData(0, 0, 2000, 2000);;
     let pixels = imageData.data;
 
-    function dumpImageData() {
-        ctx.putImageData(imageData, 0, 0, 0, 0, 1000 + 500 * (quadseen & 2), 1000 + 250 * (quadseen & 4));
+    function dumpImageData(all) {
+        if (all) {
+            ctx.putImageData(imageData, 0, 0);
+        } else {
+            ctx.putImageData(imageData, 0, 0, 0, 0, 1000 + 500 * (quadseen & 2), 1000 + 250 * (quadseen & 4));
+        }
     }
 
     let lastSleep = 0;
@@ -120,12 +125,11 @@ async function renderLoop() {
 
     while (true) {
         let next = nextEvent();
-        if (!next) {
+        while (!next) {
             await loadNextBuf();
             next = nextEvent();
-        }
-        if (!next) {
-            console.log("error?");
+            if (!next)
+                await sleep(100);
         }
         let [ts, count, oct, buf] = next;
 
@@ -134,8 +138,12 @@ async function renderLoop() {
             return;
         }
 
-        if (ts < lastSleep) {
-            console.log("loop");
+        let ox = 1000 * (oct & 1);
+        let oy = 250 * (oct & 6);
+
+        let quad = (oct&1)+((oct&4)>>1);
+
+        if (curGroup === 1 && speed > 0) {
             // clear canvas
             for (let o = 0; o < pixels.length; o += 4) {
                 pixels[o] = 0;
@@ -146,16 +154,31 @@ async function renderLoop() {
             dumpImageData();
             quadseen = 0;
         }
+        for (let cq = 1; speed < 0 && cq < 4; cq++) {
+            if (quadstart[cq] != curGroup + 1) {
+                continue;
+            }
 
-        let ox = 1000 * (oct & 1);
-        let oy = 250 * (oct & 6);
+            let sx = 1000 * (cq & 1), sy = 1000 * (cq >> 1);
 
-        let quad = (oct&1)+((oct&4)>>1);
+            console.log("rev-clear-quad", cq, curGroup, sx, sy);
+
+            for (let y = sy; y < sy + 1000; y++) {
+                for (let x = sx; x < sx + 1000; x++) {
+                    set(x, y, 27);
+                }
+            }
+            dumpImageData(true);
+            quadseen ^= 1 << cq;
+        }
 
         if (!(quadseen & (1<<quad))) {
+            quadstart[quad] = curGroup;
             quadseen |= 1 << quad;
 
             let sx = 1000 * (quad & 1), sy = 1000 * (quad >> 1);
+
+            console.log("clear-new-quad", quad, curGroup, sx, sy);
             for (let y = sy; y < sy + 1000; y++) {
                 for (let x = sx; x < sx + 1000; x++) {
                     set(x, y, 31);
@@ -173,11 +196,14 @@ async function renderLoop() {
             i += 3;
         }
 
-        if (ts < lastSleep || ts - lastSleep > speed) {
+        if (Math.abs(ts - lastSleep) > Math.abs(speed)) {
             updateTimestamp();
             dumpImageData();
             // desaturate();
             await sleepFrame();
+            while (speed == 0) {
+                await sleepFrame();
+            }
             lastSleep = ts;
         }
     }
@@ -187,9 +213,9 @@ async function renderLoop() {
 
 const N_BUFS = 84;
 let bufs = [];
-let groupLengths = [];
+let groupLengths = new Uint16Array(5542545);
+let curGroup = 0;
 let curBuf = 0;
-let curEvent = 0;
 let curIndex = 0;
 let curTs = 0;
 let startTime = 0;
@@ -226,14 +252,23 @@ async function loadNextBuf(dir) {
     }
 }
 
-function nextEvent(dir) {
+function nextEvent() {
+    if (curBuf === -1 && speed > 0) {
+        curBuf = 0;
+        curIndex = 16;
+        curGroup = 0;
+        curTs = 0;
+    }
+
     let buf = bufs[curBuf];
 
     if (!(buf instanceof Uint8Array)) {
         return;
     }
 
-    if (!groupLengths[curBuf]) {
+    if (!buf.started) {
+        buf.started = true;
+
         let magic = new TextDecoder().decode(buf.slice(0,8));
         if (magic !== "PIXLPACK") {
             console.log('bad magic', magic);
@@ -243,8 +278,6 @@ function nextEvent(dir) {
         startTime = buf[8]|(buf[9]<<8)|(buf[10]<<16);
         let startTimeHi = buf[11]|(buf[12]<<8)|(buf[13]<<16);
         startTime = (startTime) + (startTimeHi*16777216);
-
-        groupLengths[curBuf] = new Uint16Array(buf.length/30|0);
 
         curIndex = 16;
     }
@@ -263,34 +296,58 @@ function nextEvent(dir) {
         return x;
     }
 
-    if (curIndex < buf.byteLength) {
+    if (curIndex < buf.byteLength && curIndex >= 16) {
         let start = curIndex;
         let to = readUvarint();
         let ocount = readUvarint();
         let count = ocount >> 3;
         let oct = ocount & 7;
 
-        if (curEvent > groupLengths[curBuf].length) {
-            console.log("woops", curEvent, curBuf, groupLengths[curBuf].length);
+        let evtStart = curIndex, evtEnd = curIndex + count * 3;
+
+        if (speed > 0) {
+            curTs += to;
+            groupLengths[curGroup] = (curIndex - start) + 3 * count;
+            curIndex += count * 3;
+            curGroup++;
+        } else {
+            curTs -= to;
+            curGroup--;
+            curIndex = start - groupLengths[curGroup];
         }
-        groupLengths[curBuf][curEvent++] = (curIndex - start) + 3 * count;
 
-        curTs += to;
-        curIndex += count * 3;
-
-        return [curTs, count, oct, buf.subarray(curIndex - count * 3, curIndex)];
+        return [curTs, count, oct, buf.subarray(evtStart, evtEnd)];
     }
 
-    curBuf = (curBuf + 1) % N_BUFS;
-    curEvent = 0;
-    curIndex = 16;
-    curTs = 0;
+    if (speed > 0) {
+        console.log("FWD-TRANS", curBuf, curGroup, curIndex, curTs);
+        buf.lastTs = curTs;
+        curBuf = (curBuf + 1) % N_BUFS;
+        if (curBuf === 0) {
+            curGroup = 0;
+        }
+        curIndex = 16;
+        curTs = 0;
+    } else {
+        curBuf = curBuf - 1;
+        if (curBuf === -1) {
+            if (!groupLengths[groupLengths.length-1]) {
+                return;
+            }
+            curBuf = N_BUFS - 1;
+            curGroup = groupLengths.length - 1;
+        }
+        curIndex = bufs[curBuf].length - groupLengths[curGroup];
+        curTs = bufs[curBuf].lastTs;
+        console.log("REV-TRANS", curBuf, curGroup, curIndex, curTs);
+
+        quadseen = 15;
+    }
 }
 
 
 for (var i = 0; i < N_BUFS; i++) {
     bufs.push(null);
-    groupLengths.push(null);
 }
 
 renderLoop();

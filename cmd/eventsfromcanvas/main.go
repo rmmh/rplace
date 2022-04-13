@@ -226,10 +226,13 @@ func crunchEventsBinary() {
 		lastTime = 0
 	}
 
+	groupCount := 0
+
 	writeChunk := func() {
 		if obcount == 0 {
 			return
 		}
+		groupCount++
 		n := binary.PutUvarint(buf[:], curTs-lastTime)
 		lastTime = curTs
 		n += binary.PutUvarint(buf[n:], uint64(obcount<<3+int(curOct)))
@@ -279,6 +282,7 @@ func crunchEventsBinary() {
 		obcount++
 	}
 	writeChunk()
+	log.Println("groups:", groupCount)
 }
 
 func main() {
