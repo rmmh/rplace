@@ -36,7 +36,7 @@ for (let c of palette) {
     pal.push(parseInt(c.slice(5, 7), 16));
 }
 
-let speed = 0;
+let speed = 1;
 
 function calcSpeed() {
     let val = slider.value/10;
@@ -50,7 +50,11 @@ function calcSpeed() {
 }
 
 slider.oninput = function() {
-    speed = calcSpeed();
+    let newSpeed = calcSpeed();
+    if (Math.sign(newSpeed) != Math.sign(speed)) {
+        curGroup += newSpeed > 0 ? 1 : -1;
+    }
+    speed = newSpeed;
     let s = 60*speed/1000;
     document.getElementById("speed").innerText = ("" + (s>1||s<-1?s|0:Math.round(s*100)/100)) + "x";
 }
@@ -131,7 +135,9 @@ async function renderLoop() {
             if (!next)
                 await sleep(100);
         }
-        let [ts, count, oct, buf] = next;
+        let {count, oct, buf, evtStart} = next;
+
+        let i = evtStart;
 
         if (count === 0) {
             console.log("end?");
@@ -154,14 +160,29 @@ async function renderLoop() {
             dumpImageData();
             quadseen = 0;
         }
+
+        if (!(quadseen & (1<<quad))) {
+            quadstart[quad] ||= curGroup;
+            quadseen |= 1 << quad;
+
+            let sx = 1000 * (quad & 1), sy = 1000 * (quad >> 1);
+
+            console.log("fwd-white-quad", quad, curGroup, sx, sy, quadstart[quad]);
+            for (let y = sy; y < sy + 1000; y++) {
+                for (let x = sx; x < sx + 1000; x++) {
+                    set(x, y, 31);
+                }
+            }
+        }
+
         for (let cq = 1; speed < 0 && cq < 4; cq++) {
-            if (quadstart[cq] != curGroup + 1) {
+            if (quadstart[cq] != curGroup + 2) {
                 continue;
             }
 
             let sx = 1000 * (cq & 1), sy = 1000 * (cq >> 1);
 
-            console.log("rev-clear-quad", cq, curGroup, sx, sy);
+            console.log("rev-black-quad", cq, curGroup, sx, sy);
 
             for (let y = sy; y < sy + 1000; y++) {
                 for (let x = sx; x < sx + 1000; x++) {
@@ -172,21 +193,6 @@ async function renderLoop() {
             quadseen ^= 1 << cq;
         }
 
-        if (!(quadseen & (1<<quad))) {
-            quadstart[quad] = curGroup;
-            quadseen |= 1 << quad;
-
-            let sx = 1000 * (quad & 1), sy = 1000 * (quad >> 1);
-
-            console.log("clear-new-quad", quad, curGroup, sx, sy);
-            for (let y = sy; y < sy + 1000; y++) {
-                for (let x = sx; x < sx + 1000; x++) {
-                    set(x, y, 31);
-                }
-            }
-        }
-
-        let i = 0;
 
         for (let j = 0; j < count; j++) {
             let x = buf[i] + ((buf[i+1]<<8)&0x300);
@@ -196,7 +202,7 @@ async function renderLoop() {
             i += 3;
         }
 
-        if (Math.abs(ts - lastSleep) > Math.abs(speed)) {
+        if (Math.abs(curTs - lastSleep) > Math.abs(speed)) {
             updateTimestamp();
             dumpImageData();
             // desaturate();
@@ -204,7 +210,7 @@ async function renderLoop() {
             while (speed == 0) {
                 await sleepFrame();
             }
-            lastSleep = ts;
+            lastSleep = curTs;
         }
     }
     updateTimestamp();
@@ -213,7 +219,10 @@ async function renderLoop() {
 
 const N_BUFS = 84;
 let bufs = [];
-let groupLengths = new Uint16Array(5542545);
+
+// group lengths can exceed a 16-bit integer,
+// so it's best to just pack the offsets as 24b with a 7b buf id
+let groupOffsets = new Uint32Array(5542545);
 let curGroup = 0;
 let curBuf = 0;
 let curIndex = 0;
@@ -266,8 +275,8 @@ function nextEvent() {
         return;
     }
 
-    if (!buf.started) {
-        buf.started = true;
+    if (!buf.lastTs) {
+        buf.lastTs = true;
 
         let magic = new TextDecoder().decode(buf.slice(0,8));
         if (magic !== "PIXLPACK") {
@@ -296,7 +305,7 @@ function nextEvent() {
         return x;
     }
 
-    if (curIndex < buf.byteLength && curIndex >= 16) {
+    if (curIndex < buf.byteLength && curIndex >= 16 && curGroup >= 0) {
         let start = curIndex;
         let to = readUvarint();
         let ocount = readUvarint();
@@ -307,41 +316,50 @@ function nextEvent() {
 
         if (speed > 0) {
             curTs += to;
-            groupLengths[curGroup] = (curIndex - start) + 3 * count;
+            groupOffsets[curGroup] = (start << 7) | curBuf;
             curIndex += count * 3;
             curGroup++;
         } else {
             curTs -= to;
             curGroup--;
-            curIndex = start - groupLengths[curGroup];
+            curIndex = groupOffsets[curGroup] >>> 7;
+            let newBuf = groupOffsets[curGroup] & 0x7f;
+            if (newBuf !== curBuf) {
+                curBuf = newBuf;
+                curTs = bufs[curBuf].lastTs;
+            }
         }
 
-        return [curTs, count, oct, buf.subarray(evtStart, evtEnd)];
+        if (evtEnd > buf.length) {
+            throw "group too long?";
+        }
+
+        return {count, oct, buf, evtStart};
     }
 
     if (speed > 0) {
-        console.log("FWD-TRANS", curBuf, curGroup, curIndex, curTs);
         buf.lastTs = curTs;
         curBuf = (curBuf + 1) % N_BUFS;
-        if (curBuf === 0) {
+        if (curBuf <= 0) {
             curGroup = 0;
         }
         curIndex = 16;
         curTs = 0;
     } else {
         curBuf = curBuf - 1;
-        if (curBuf === -1) {
-            if (!groupLengths[groupLengths.length-1]) {
+        if (curBuf < 0) {
+            if (bufs[N_BUFS - 1]) {
+                curBuf = N_BUFS - 1;
+                curGroup = groupOffsets.length - 1;
+                curIndex = groupOffsets[curGroup] >>> 7;
+                curBuf = groupOffsets[curGroup] & 0x7f;
+                curTs = bufs[curBuf].lastTs;
+                quadseen = 0;
+            } else {
                 return;
             }
-            curBuf = N_BUFS - 1;
-            curGroup = groupLengths.length - 1;
         }
-        curIndex = bufs[curBuf].length - groupLengths[curGroup];
         curTs = bufs[curBuf].lastTs;
-        console.log("REV-TRANS", curBuf, curGroup, curIndex, curTs);
-
-        quadseen = 15;
     }
 }
 
