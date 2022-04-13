@@ -134,8 +134,9 @@ async function renderLoop() {
         while (!next) {
             await loadNextBuf();
             next = nextEvent();
-            if (!next)
+            if (!next) {
                 await sleep(100);
+            }
         }
         let {count, oct, buf, evtStart} = next;
 
@@ -383,8 +384,11 @@ var zoom = 1;
 var tx = 0, ty = 0;
 
 viewport.onwheel = function(e) {
-    let mx = 1000-(1000-(e.clientX-tx))/zoom;
-    let my = 1000-(1000-(e.clientY-ty))/zoom;
+    let bounds = viewport.getBoundingClientRect();
+    let cx = e.clientX - bounds.left;
+    let cy = e.clientY - bounds.top;
+    let mx = 1000-(1000-(cx-tx))/zoom;
+    let my = 1000-(1000-(cy-ty))/zoom;
 
     let oldZoom = zoom;
 
@@ -399,8 +403,8 @@ viewport.onwheel = function(e) {
 
     // thanks, wolframalpha! solving for mx_beforezoom=mx_afterzoom,
     // to keep the point the mouse is hovering over invariant after the zoom.
-    tx = zoom * (1000 + tx - e.clientX) / oldZoom + e.clientX - 1000;
-    ty = zoom * (1000 + ty - e.clientY) / oldZoom + e.clientY - 1000;
+    tx = zoom * (1000 + tx - cx) / oldZoom + cx - 1000;
+    ty = zoom * (1000 + ty - cy) / oldZoom + cy - 1000;
 
     canvas.style["image-rendering"] = zoom < 1 ? 'auto' : 'pixelated';
     updateTransform();
