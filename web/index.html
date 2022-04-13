@@ -53,9 +53,6 @@ function calcSpeed() {
 
 slider.oninput = function() {
     let newSpeed = calcSpeed();
-    if (Math.sign(newSpeed) != Math.sign(speed)) {
-        curGroup += newSpeed > 0 ? 1 : -1;
-    }
     speed = newSpeed;
     let s = 60*speed/1000;
     document.getElementById("speed").innerText = ("" + (s>1||s<-1?s|0:Math.round(s*100)/100)) + "x";
@@ -76,6 +73,16 @@ let quadstart = [0, 0, 0, 0];
 let pixelsPaletted = new Uint8Array(2000*2000);
 for (let i = 0; i < pixelsPaletted.length; i++) {
     pixelsPaletted[i] = 31; // white
+}
+
+function buf2hex(buffer) { // buffer is an ArrayBuffer
+  return [...new Uint8Array(buffer)]
+      .map(x => x.toString(16).padStart(2, '0'))
+      .join('');
+}
+
+async function pixelsHash() {
+    return buf2hex(await crypto.subtle.digest("SHA-1", pixelsPaletted));
 }
 
 function updateTimestamp() {
@@ -138,6 +145,7 @@ async function renderLoop() {
                 await sleep(100);
             }
         }
+
         let {count, oct, buf, evtStart} = next;
 
         let i = evtStart;
@@ -196,13 +204,25 @@ async function renderLoop() {
             quadseen ^= 1 << cq;
         }
 
-
         for (let j = 0; j < count; j++) {
             let x = buf[i] + ((buf[i+1]<<8)&0x300);
             let y = (buf[i+1]>>2)+((buf[i+2]<<6)&0x1FF);
             let col = buf[i+2]>>3;
             xor(ox + x, oy + y, col);
             i += 3;
+        }
+
+        if (0 && curGroup % 100000 < 2) {
+            let h = await pixelsHash();
+            console.log(curGroup, h, count, oct, evtStart);
+            groupHashes[curGroup] ||= h;
+            if (groupHashes[curGroup] != h) {
+                throw "reproduction failure";
+            }
+
+            if (0 && curGroup >= 1000 && speed > 0) {
+                speed = -1000;
+            }
         }
 
         if (Math.abs(curTs - lastSleep) > Math.abs(speed)) {
@@ -230,7 +250,8 @@ let bufs = [];
 
 // group lengths can exceed a 16-bit integer,
 // so it's best to just pack the offsets as 24b with a 7b buf id
-let groupOffsets = new Uint32Array(5542545);
+let groupOffsets = new Uint32Array(5542546);
+let groupHashes = {};
 let curGroup = 0;
 let curBuf = 0;
 let curIndex = 0;
@@ -277,14 +298,23 @@ function nextEvent() {
         curTs = 0;
     }
 
+    if (speed < 0) {
+        curIndex = groupOffsets[curGroup-1] >>> 7;
+        let newBuf = groupOffsets[curGroup-1] & 0x7f;
+        if (newBuf !== curBuf) {
+            curBuf = newBuf;
+            curTs = bufs[curBuf].lastTs;
+        }
+    }
+
     let buf = bufs[curBuf];
 
     if (!(buf instanceof Uint8Array)) {
         return;
     }
 
-    if (!buf.lastTs) {
-        buf.lastTs = true;
+    if (!buf.started) {
+        buf.started = true;
 
         let magic = new TextDecoder().decode(buf.slice(0,8));
         if (magic !== "PIXLPACK") {
@@ -313,7 +343,7 @@ function nextEvent() {
         return x;
     }
 
-    if (curIndex < buf.byteLength && curIndex >= 16 && curGroup >= 0) {
+    if (curIndex < buf.byteLength && curIndex >= 16 && curGroup + Math.sign(speed) >= 0) {
         let start = curIndex;
         let to = readUvarint();
         let ocount = readUvarint();
@@ -330,12 +360,7 @@ function nextEvent() {
         } else {
             curTs -= to;
             curGroup--;
-            curIndex = groupOffsets[curGroup] >>> 7;
-            let newBuf = groupOffsets[curGroup] & 0x7f;
-            if (newBuf !== curBuf) {
-                curBuf = newBuf;
-                curTs = bufs[curBuf].lastTs;
-            }
+            curIndex = start;
         }
 
         if (evtEnd > buf.length) {
