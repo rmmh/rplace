@@ -164,7 +164,13 @@ function dumpImageData(all) {
     if (all) {
         ctx.putImageData(imageData, 0, 0);
     } else {
-        ctx.putImageData(imageData, 0, 0, 0, 0, 1000 + 500 * (quadseen & 2), 1000 + 250 * (quadseen & 4));
+        let width = 1000 + 500 * (quadseen & 2);
+        let height = 1000 + 250 * (quadseen & 4);
+        ctx.putImageData(imageData, 0, 0,
+            cx, cy,
+            Math.min(width - cx, cw),
+            Math.min(height - cy, ch),
+        );
     }
 }
 
@@ -198,7 +204,7 @@ function applyGroup(count, oct, i) {
             pixels[o+2] = 0;
         }
         updateTimestamp();
-        dumpImageData();
+        dumpImageData(true);
         quadseen = 0;
     }
 
@@ -214,6 +220,8 @@ function applyGroup(count, oct, i) {
                 set(x, y, 31);
             }
         }
+
+        dumpImageData(true);
     }
 
     for (let cq = 1; speed < 0 && cq < 4; cq++) {
@@ -512,14 +520,25 @@ viewport.onwheel = function(e) {
     updateTransform();
 }
 
+// track what part of the canvas is actually visible in the viewport for faster blitting
+let cx = 0, cw = 2000, cy = 0, ch = 2000;
+
 function updateTransform() {
     // clamp translation to canvas bounds
+    let vr = viewport.getBoundingClientRect();
+
     tx = Math.min(tx, viewport.clientWidth - 20 - ((-1000 * zoom) + 1000));
     tx = Math.max(tx, 20 - ((500 * (quadseen & 2) * zoom) + 1000));
-    ty = Math.min(ty, viewport.clientHeight - 60 - ((-1000 * zoom) + 1000));
+    ty = Math.min(ty, viewport.clientHeight - 20 - vr.top - ((-1000 * zoom) + 1000));
     ty = Math.max(ty, 20 - ((250 * (quadseen & 4) * zoom) + 1000));
 
     canvas.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + zoom + ")";
+
+    let cr = canvas.getBoundingClientRect()
+    cx = Math.max(0, ((-cr.x / zoom)|0)-1);
+    cw = Math.min(2000, ((vr.width / zoom)|0) + 3);
+    cy = Math.max(0, ((-cr.y / zoom)|0)-1);
+    ch = Math.min(2000, ((vr.height / zoom)|0) + 3);
 }
 
 window.onresize = updateTransform;
@@ -532,5 +551,12 @@ viewport.onmousemove = function(e) {
     }
 }
 updateTransform();
+
+window.oncontextmenu = function() {
+    // ensure `right click -> save as` gets a whole, good canvas,
+    // not just the visible rect
+    dumpImageData(true);
+}
+
 </script>
 </html>
