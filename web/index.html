@@ -558,5 +558,19 @@ window.oncontextmenu = function() {
     dumpImageData(true);
 }
 
+let prePauseSpeed = '200';
+
+document.addEventListener('keydown', function(e) {
+    if (e.key === " ") {
+        if (speed) {
+            prePauseSpeed = speedslider.value;
+            speedslider.value = "200";
+            speedslider.oninput();
+        } else if (prePauseSpeed !== '200') {
+            speedslider.value = prePauseSpeed;
+            speedslider.oninput();
+        }
+    }
+});
 </script>
 </html>
