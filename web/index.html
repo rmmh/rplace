@@ -540,6 +540,8 @@ function updateTransform() {
     cw = Math.min(2000, ((vr.width / zoom)|0) + 3);
     cy = Math.max(0, ((-cr.y / zoom)|0)-1);
     ch = Math.min(2000, ((vr.height / zoom)|0) + 3);
+
+    dumpImageData();
 }
 
 window.onresize = updateTransform;
