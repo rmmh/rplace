@@ -83,8 +83,6 @@ async function doJump(target) {
     let ospeed = speed;
     speed = jumpTarget < curTs ? -1 : 1;
 
-    console.log("JUMP START", jumpTarget, curTs, curGroup, speed);
-
     while (speed < 0 ? jumpTarget < curTs : jumpTarget > curTs) {
         if (speed !== 1 && speed !== -1) {
             ospeed = speed;   // adjusted speed during jump!
@@ -111,8 +109,6 @@ async function doJump(target) {
         let {count, oct, evtStart} = next;
         applyGroup(count, oct, evtStart);
     }
-
-    console.log("JUMP END", jumpTarget, curTs, curGroup, speed, ospeed);
 
     dumpImageData();
     updateTimestamp();
@@ -535,13 +531,39 @@ function updateTransform() {
 
     canvas.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + zoom + ")";
 
-    let cr = canvas.getBoundingClientRect()
+    let cr = canvas.getBoundingClientRect();
     cx = Math.max(0, ((-cr.x / zoom)|0)-1);
     cw = Math.min(2000, ((vr.width / zoom)|0) + 3);
     cy = Math.max(0, ((-cr.y / zoom)|0)-1);
     ch = Math.min(2000, ((vr.height / zoom)|0) + 3);
 
     dumpImageData();
+    updateUrl();
+}
+
+function setTransform(x, y, z) {
+    if (z) {
+        zoom = z;
+    }
+    updateTransform();
+    if (x) {
+        tx += (((cx+cw/2)|0)-x)*zoom;
+    }
+    if (y) {
+        ty += (((cy+ch/2)|0)-y)*zoom;
+    }
+    updateTransform();
+}
+
+let urlUpdateHandle = 0;
+function updateUrl() {
+    if (urlUpdateHandle) {
+        clearTimeout(urlUpdateHandle);
+    }
+    urlUpdateHandle = setTimeout(function() {
+        history.replaceState(null, "", `#x${(cx+cw/2)|0}y${(cy+ch/2)|0}z${zoom}`)
+    }, 200);
+
 }
 
 window.onresize = updateTransform;
@@ -553,7 +575,6 @@ viewport.onmousemove = function(e) {
         updateTransform();
     }
 }
-updateTransform();
 
 window.oncontextmenu = function() {
     // ensure `right click -> save as` gets a whole, good canvas,
@@ -583,5 +604,19 @@ document.addEventListener('keydown', function(e) {
         doJump(curTs - 15000);
     }
 });
+
+if (document.location.hash) {
+    let x = null, y = null, z = null;
+    for (const m of document.location.hash.matchAll(/([a-z])(-?[0-9]+)/g)) {
+        switch (m[1]) {
+        case 'x': x = +m[2]; break;
+        case 'y': y = +m[2]; break;
+        case 'z': z = +m[2]; break;
+        }
+    }
+    setTransform(x, y, z);
+} else {
+    updateTransform();
+}
 </script>
 </html>
