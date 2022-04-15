@@ -68,7 +68,9 @@ let jumpTarget = 0;
 // getting the next event is an asynchronous operation
 let nextEventLock = 0; // 0 = unheld, 1 = normal playback, 2 = jumping
 
-async function doJump() {
+async function doJump(target) {
+    jumpTarget = target;
+
     while (nextEventLock) {
         if (nextEventLock == 2) {
             return;
@@ -120,8 +122,7 @@ async function doJump() {
 }
 
 timeslider.oninput = async function(e) {
-    jumpTarget = +e.target.value - startTime;
-    await doJump();
+    await doJump(+e.target.value - startTime);
 }
 
 function sleep(ms) {
@@ -570,6 +571,14 @@ document.addEventListener('keydown', function(e) {
             speedslider.value = prePauseSpeed;
             speedslider.oninput();
         }
+    } else if (e.key === "ArrowLeft") {
+        doJump(curTs - 1000);
+    } else if (e.key === "ArrowRight") {
+        doJump(curTs + 1000);
+    } else if (e.key === "ArrowUp") {
+        doJump(curTs + 15000);
+    } else if (e.key === "ArrowDown") {
+        doJump(curTs - 15000);
     }
 });
 </script>
