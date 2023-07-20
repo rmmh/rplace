@@ -28,6 +28,8 @@ func (s *server) fullHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	ts, _ := strconv.Atoi(vars["ts"])
 
+	fullReq := r.URL.Query().Has("full")
+
 	ims := []*image.Paletted{}
 
 	maxTs := 0
@@ -38,7 +40,7 @@ func (s *server) fullHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if maxTs != ts {
+	if maxTs != ts && !fullReq {
 		http.Redirect(w, r, fmt.Sprintf("%d.png", maxTs), http.StatusMovedPermanently)
 		return
 	}
@@ -72,7 +74,7 @@ func (s *server) fullHandler(w http.ResponseWriter, r *http.Request) {
 		height = 2000
 	}
 
-	if r.URL.Query().Has("full") {
+	if fullReq {
 		width = 2000
 		height = 2000
 	}
