@@ -91,8 +91,8 @@ func writeEventsBinary() {
 
 		for y := 0; y < 1000; y++ {
 			for x := 0; x < 1000; x++ {
-				ox := x + 1000*(s.Quad%2)
-				oy := y + 1000*(s.Quad/2)
+				ox := x + 1000*(s.Canvas%2)
+				oy := y + 1000*(s.Canvas/2)
 
 				wc := si.Pix[x+y*1000]
 				sc := state.Pix[ox+oy*2000]

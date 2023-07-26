@@ -30,11 +30,11 @@ func (s *server) fullHandler(w http.ResponseWriter, r *http.Request) {
 
 	fullReq := r.URL.Query().Has("full")
 
-	ims := []*image.Paletted{}
+	ims := [6]*image.Paletted{}
 
 	maxTs := 0
-	for quad := 0; quad < 4; quad++ {
-		e := s.dr.FindNearestLeft(ts, quad)
+	for canvas := 0; canvas < 6; canvas++ {
+		e := s.dr.FindNearestLeft(ts, canvas)
 		if e != nil && e.Ts > maxTs {
 			maxTs = e.Ts
 		}
@@ -45,57 +45,101 @@ func (s *server) fullHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for quad := 0; quad < 4; quad++ {
-		e := s.dr.FindNearestLeft(ts, quad)
+	for canvas := 0; canvas < 6; canvas++ {
+		e := s.dr.FindNearestLeft(ts, canvas)
 		if e == nil {
 			continue
 		}
-		log.Printf("%d quad %d -> %s", ts, quad, e.F.Name)
+		log.Printf("%d canvas %d -> %s", ts, canvas, e.F.Name)
 		if math.Abs(float64(e.Ts-ts)) < 180_000 {
 			im, err := s.dr.GetImage(e)
 			if err != nil {
 				http.Error(w, err.Error(), 500)
 				return
 			}
-			ims = append(ims, im)
+			ims[canvas] = im
 		}
 	}
 
-	width := 1000
-	height := 1000
-	switch len(ims) {
-	case 0, 3:
-		http.Error(w, "no images found", 404)
-		return
-	case 2:
-		width = 2000
-	case 4:
-		width = 2000
-		height = 2000
-	}
+	width := 3000
+	height := 2000
 
-	if fullReq {
-		width = 2000
-		height = 2000
+	if ims[1] == nil {
+		w.WriteHeader(404)
+		return
 	}
 
 	var out *image.Paletted
-	if width == 1000 && height == 1000 {
-		out = ims[0]
-	} else {
-		out = image.NewPaletted(image.Rect(0, 0, width, height), ims[0].Palette)
-		for i, im := range ims {
-			for y := 0; y < 1000; y++ {
-				for x := 0; x < 1000; x++ {
-					out.SetColorIndex(x+1000*(i%2), y+1000*(i/2), im.ColorIndexAt(x, y))
+	out = image.NewPaletted(image.Rect(0, 0, width, height), ims[1].Palette)
+	for i, im := range ims {
+		if im == nil {
+			continue
+		}
+		ox := (i % 3) * 1000
+		oy := (i / 3) * 1000
+		for y := 0; y < 1000; y++ {
+			for x := 0; x < 1000; x++ {
+				out.SetColorIndex(x+ox, y+oy, im.ColorIndexAt(x, y))
+			}
+		}
+	}
+
+	var cropleft, cropright, croptop, cropbottom int
+
+cropleft:
+	for ; true; cropleft += 500 {
+		for y := 0; y < height; y++ {
+			for x := 0; x < 500; x++ {
+				c := out.ColorIndexAt(x+cropleft, y)
+				if c != 0 && c != 32 {
+					break cropleft
 				}
 			}
+		}
+	}
+cropright:
+	for ; ; cropright += 500 {
+		for y := 0; y < height; y++ {
+			for x := 1; x <= 500; x++ {
+				c := out.ColorIndexAt(width-x-cropright, y)
+				if c != 0 && c != 32 {
+					break cropright
+				}
+			}
+		}
+	}
+croptop:
+	for ; ; croptop += 500 {
+		for y := 0; y < 500; y++ {
+			for x := 0; x < 3000; x++ {
+				c := out.ColorIndexAt(x, y+croptop)
+				if c != 0 && c != 32 {
+					break croptop
+				}
+			}
+		}
+	}
+cropbottom:
+	for ; ; cropbottom += 500 {
+		for y := 1; y <= 500; y++ {
+			for x := 0; x < width; x++ {
+				c := out.ColorIndexAt(x, height-y-cropbottom)
+				if c != 0 && c != 32 {
+					break cropbottom
+				}
+			}
+		}
+	}
+	cropped := image.NewPaletted(image.Rect(0, 0, width-cropleft-cropright, height-croptop-cropbottom), out.Palette)
+	for y := croptop; y < height-cropbottom; y++ {
+		for x := cropleft; x < width-cropright; x++ {
+			cropped.SetColorIndex(x-cropleft, y-croptop, out.ColorIndexAt(x, y))
 		}
 	}
 
 	w.Header().Add("cache-control", "max-age=25920000")
 	enc := png.Encoder{CompressionLevel: png.BestSpeed}
-	err := enc.Encode(w, out)
+	err := enc.Encode(w, cropped)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -129,20 +173,24 @@ func (s *server) deltaHandler(w http.ResponseWriter, r *http.Request) {
 var indexTmpl = template.Must(template.New("index").Parse(`
 <html>
 <head>
-<title>r/Place 2022 Timeline</title>
+<title>r/Place 2023 Timeline</title>
 </head>
-<body style="overflow:hidden;margin:0;background-color:black">
-<div style="margin:5px">
-<input id="slider" type="range" min="1648818287221" max="1649116859027" value="1648818287221" style="width:100%"><br>
+<body style="overflow:hidden;margin:0;background-color:black;color:white;">
+<div style="margin:5px;display:flex;">
+<span id="timestamp"></span>&nbsp;<br>
+<input id="slider" type="range" min="1689858080999" max="1690320892999" value="1689858080999" style="width:100%">
+</div>
+<div style="margin:5px;display:flex;">
 <input id="slider2" type="range" min="-60000" max="60000" value="0" style="width:100%"><br>
 </div>
 <div id="viewport" style="height:100%;user-select:none;overflow:clip">
-<img id="canvas" style="image-rendering:pixelated;touch-action:none" src="full/1648818287221.png" ondragstart="return false">
+<img id="canvas" style="image-rendering:pixelated;touch-action:none" src="full/1689858080999.png" ondragstart="return false">
 </div>
 </body>
 <script type="text/javascript">
 var lastUpdate = 0;
 function updateImage() {
+	timestamp.innerText = new Date(+slider.value).toISOString().slice(0, 19);
 	if (!canvas.complete) {
 		setTimeout(updateImage, 100);
 		return;

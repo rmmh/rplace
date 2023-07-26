@@ -41,7 +41,7 @@ func (s *SimpleCache[K, V]) Put(k K, v V) {
 }
 
 type DeltaReaderEntry struct {
-	Ts, Quad    int
+	Ts, Canvas  int
 	Base, Delta int
 	F           *zip.File
 }
@@ -61,8 +61,8 @@ func (d DeltaReaderEntry) Read() (*image.Paletted, error) {
 
 type DeltaReader struct {
 	fzip, dzip, tzip *zip.ReadCloser
-	Files            [4][]DeltaReaderEntry
-	FileMap          [4]map[int]DeltaReaderEntry
+	Files            [6][]DeltaReaderEntry
+	FileMap          [6]map[int]DeltaReaderEntry
 	L                sync.Mutex
 
 	c *SimpleCache[int, *image.Paletted]
@@ -90,7 +90,7 @@ func MakeDeltaReader(full, delta, ticks string) (*DeltaReader, error) {
 	d := &DeltaReader{fzip: fzip, dzip: dzip, tzip: tzip,
 		c: NewSimpleCache[int, *image.Paletted](128),
 	}
-	for i := 0; i < 4; i++ {
+	for i := 0; i < len(d.FileMap); i++ {
 		d.FileMap[i] = make(map[int]DeltaReaderEntry)
 	}
 
@@ -103,14 +103,14 @@ func MakeDeltaReader(full, delta, ticks string) (*DeltaReader, error) {
 		if err != nil {
 			return err
 		}
-		quad, err := strconv.Atoi(comps[1])
+		canvas, err := strconv.Atoi(comps[1])
 		if err != nil {
 			return err
 		}
 		m := DeltaReaderEntry{
-			Ts:   ts,
-			Quad: quad,
-			F:    f,
+			Ts:     ts,
+			Canvas: canvas,
+			F:      f,
 		}
 		if len(comps) == 4 {
 			m.Base, err = strconv.Atoi(comps[3])
@@ -127,8 +127,8 @@ func MakeDeltaReader(full, delta, ticks string) (*DeltaReader, error) {
 				return err
 			}
 		}
-		d.Files[quad] = append(d.Files[quad], m)
-		d.FileMap[quad][ts] = m
+		d.Files[canvas] = append(d.Files[canvas], m)
+		d.FileMap[canvas][ts] = m
 		return nil
 	}
 
@@ -194,7 +194,7 @@ func (d *DeltaReader) FindNearestLeft(ts, quad int) *DeltaReaderEntry {
 
 func (d *DeltaReader) GetImageRaw(e DeltaReaderEntry) (*image.Paletted, error) {
 	// lock must be held
-	k := e.Ts<<2 + e.Quad
+	k := e.Ts<<2 + e.Canvas
 	im, ok := d.c.Get(k)
 	if ok {
 		return im, nil
@@ -221,12 +221,12 @@ func (d *DeltaReader) GetImage(e *DeltaReaderEntry) (*image.Paletted, error) {
 	}
 
 	if e.Base != 0 {
-		b, err := d.GetImageRaw(d.FileMap[e.Quad][e.Base])
+		b, err := d.GetImageRaw(d.FileMap[e.Canvas][e.Base])
 		if err != nil {
 			return nil, err
 		}
 		if e.Delta != 0 {
-			d, err := d.GetImageRaw(d.FileMap[e.Quad][e.Delta])
+			d, err := d.GetImageRaw(d.FileMap[e.Canvas][e.Delta])
 			if err != nil {
 				return nil, err
 			}
@@ -250,9 +250,18 @@ func ApplyDelta(base, delta *image.Paletted) *image.Paletted {
 	}
 	combined := image.NewPaletted(base.Rect, base.Palette)
 	copy(combined.Pix, base.Pix)
-	for i := 0; i < len(delta.Pix); i++ {
-		if ci := delta.Pix[i]; ci > 0 {
-			combined.Pix[i] = ci - 1
+	if len(delta.Palette) == len(base.Palette) {
+		for i, ci := range delta.Pix {
+			if ci > 0 {
+				combined.Pix[i] = ci
+			}
+		}
+	} else {
+		// old style
+		for i := 0; i < len(delta.Pix); i++ {
+			if ci := delta.Pix[i]; ci > 0 {
+				combined.Pix[i] = ci - 1
+			}
 		}
 	}
 	return combined

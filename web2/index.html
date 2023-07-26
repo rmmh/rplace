@@ -5,7 +5,7 @@
 <body style="overflow:hidden;margin:0;background-color:black;color:white;">
 <div style="margin:5px;display:flex;">
     <span id="timestamp"></span>&nbsp;<br>
-    <input id="timeslider" type="range" min="1689859449000" max="1690301898148" value="0" style="flex-grow:1;display:inline;" draggable="false">
+    <input id="timeslider" type="range" min="1689859449000" max="1690320849606" value="0" style="flex-grow:1;display:inline;" draggable="false">
 </div>
 <div style="margin:5px;display:flex;">
     <span id="speed" style="width:5em;text-align:center;">5x</span>
@@ -27,8 +27,8 @@
 
 // group lengths can exceed a 16-bit integer,
 // so it's best to just pack the offsets as 24b with a 7b buf id
-let groupOffsets = new Uint32Array(9179590);
-const N_BUFS = 123;
+let groupOffsets = new Uint32Array(9896754);
+const N_BUFS = 129;
 
 const palette = [
 "#6D001A", "#BE0039", "#FF4500", "#FFA800", "#FFD635", "#FFF8B8", "#00A368", "#00CC78",
@@ -557,8 +557,8 @@ function updateTransform() {
     // clamp translation to canvas bounds
     let vr = viewport.getBoundingClientRect();
 
-    tx = Math.min(tx, viewport.clientWidth - 20 - ((-1000 * zoom) + 1000));
-    tx = Math.max(tx, 20 - ((3000 * zoom) + 1000));
+    tx = Math.min(tx, viewport.clientWidth - 20 - ((-1500 * zoom) + 1500));
+    tx = Math.max(tx, 20 - ((3000 * zoom) + 1500));
     ty = Math.min(ty, viewport.clientHeight - 20 - vr.top - ((-1000 * zoom) + 1000));
     ty = Math.max(ty, 20 - ((2000 * zoom) + 1000));
 

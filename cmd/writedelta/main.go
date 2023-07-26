@@ -10,7 +10,6 @@ import (
 	"flag"
 	"fmt"
 	"image"
-	"image/color"
 	"image/png"
 	"io"
 	"log"
@@ -52,9 +51,9 @@ func loadPng(path string) *image.Paletted {
 }
 
 type TimestampedImage struct {
-	ts, quad int
-	path     string
-	img      *image.Paletted
+	ts, canvas int
+	path       string
+	img        *image.Paletted
 }
 
 func imhash(im image.Image) string {
@@ -64,14 +63,12 @@ func imhash(im image.Image) string {
 }
 
 func computeDelta(base, target *image.Paletted) *image.Paletted {
-	// TODO: this palette is wasteful: the base palette *already* has 0 as the
-	// transparent color, but there's a fair amount of data to fix.
-	delta := image.NewPaletted(image.Rect(0, 0, 1000, 1000), append(color.Palette{color.Transparent}, base.Palette...))
+	delta := image.NewPaletted(image.Rect(0, 0, 1000, 1000), base.Palette)
 	for y := 0; y < 1000; y++ {
 		for x := 0; x < 1000; x++ {
 			newColor := target.ColorIndexAt(x, y)
 			if newColor != base.ColorIndexAt(x, y) {
-				delta.SetColorIndex(x, y, newColor+1)
+				delta.SetColorIndex(x, y, newColor)
 			}
 		}
 	}
@@ -83,7 +80,7 @@ func writeDelta(target, base TimestampedImage, n int, add OrderedZipAdder) {
 	hashInput := imhash(im)
 	diff := computeDelta(base.img, im)
 	header := &zip.FileHeader{
-		Name:     fmt.Sprintf("%d-%d-%d.png", target.ts, target.quad, base.ts),
+		Name:     fmt.Sprintf("%d-%d-%d.png", target.ts, target.canvas, base.ts),
 		Modified: time.Unix(0, int64(target.ts)*int64(time.Millisecond)),
 	}
 	pngbuf := bytes.Buffer{}
@@ -160,8 +157,8 @@ func makeFullDelta() {
 	semWeight := int64(64)
 	sem := semaphore.NewWeighted(semWeight)
 
-	for quad := 0; quad <= 4; quad++ {
-		pattern := fmt.Sprintf("%s/*-%d-f-*.png", *imgDir, quad)
+	for canvas := 0; canvas <= 6; canvas++ {
+		pattern := fmt.Sprintf("%s/*-%d-f-*.png", *imgDir, canvas)
 		matches, err := filepath.Glob(pattern)
 		if err != nil {
 			log.Fatal(err)
@@ -177,19 +174,18 @@ func makeFullDelta() {
 			if err != nil {
 				log.Fatal(path, err)
 			}
-			// if ts > 1648862867221 {break}
 			st, err := os.Stat(path)
 			if err != nil {
 				log.Fatal(path, err)
 			}
 			inpSize += int(st.Size())
-			images = append(images, TimestampedImage{ts: ts, quad: quad, path: path})
+			images = append(images, TimestampedImage{ts: ts, canvas: canvas, path: path})
 		}
 
 		baseImages := []TimestampedImage{}
 
 		// first, determine the base images at given intervals
-		for queryTime := 1648817087221; queryTime <= 1649116967221; queryTime += 120_000 {
+		for queryTime := 1689858080999; queryTime <= 1690320892999; queryTime += 120_000 {
 			i := sort.Search(len(images), func(i int) bool {
 				return images[i].ts > queryTime
 			}) - 1
@@ -211,7 +207,7 @@ func makeFullDelta() {
 					log.Fatal(err)
 				}
 				bfw.Add(&zip.FileHeader{
-					Name:     fmt.Sprintf("%d-%d.png", i.ts, quad),
+					Name:     fmt.Sprintf("%d-%d.png", i.ts, canvas),
 					Modified: time.Unix(0, int64(i.ts)*int64(time.Millisecond)),
 				}, &pngbuf, n)
 				sem.Release(1)
@@ -272,9 +268,9 @@ func writeTick(target TimestampedImage, base *delta.DeltaReaderEntry, baseImg *i
 		Modified: time.Unix(0, int64(target.ts)*int64(time.Millisecond)),
 	}
 	if base.Base > 0 {
-		header.Name = fmt.Sprintf("%d-%d-%d-%d.png", target.ts, target.quad, base.Ts, base.Base)
+		header.Name = fmt.Sprintf("%d-%d-%d-%d.png", target.ts, target.canvas, base.Ts, base.Base)
 	} else {
-		header.Name = fmt.Sprintf("%d-%d-%d.png", target.ts, target.quad, base.Ts)
+		header.Name = fmt.Sprintf("%d-%d-%d.png", target.ts, target.canvas, base.Ts)
 	}
 	pngbuf := bytes.Buffer{}
 	png.Encode(&pngbuf, diff)
@@ -329,11 +325,11 @@ func makeTickDelta(urlspath string) {
 				if err != nil {
 					log.Fatal(err)
 				}
-				quad, err := strconv.Atoi(comps[1])
+				canvas, err := strconv.Atoi(comps[1])
 				if err != nil {
 					log.Fatal(err)
 				}
-				haves[ts<<2+quad] = true
+				haves[ts<<3+canvas] = true
 			}
 			continue
 		}
@@ -375,14 +371,14 @@ func makeTickDelta(urlspath string) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		quad, err := strconv.Atoi(comps[1])
+		canvas, err := strconv.Atoi(comps[1])
 		if err != nil {
 			log.Fatal(err)
 		}
-		if haves[ts<<2+quad] {
+		if haves[ts<<3+canvas] {
 			continue
 		}
-		m := deltaReader.FindNearest(ts, quad)
+		m := deltaReader.FindNearest(ts, canvas)
 		if m.Ts == ts {
 			fmt.Println("HAVE", ts)
 			continue
@@ -394,7 +390,7 @@ func makeTickDelta(urlspath string) {
 		}
 
 		sem.Acquire(context.Background(), 1)
-		go writeTick(TimestampedImage{ts: ts, quad: quad, path: u}, m, im, zw.NextNumber(), func(header *zip.FileHeader, r io.Reader, n int) {
+		go writeTick(TimestampedImage{ts: ts, canvas: canvas, path: u}, m, im, zw.NextNumber(), func(header *zip.FileHeader, r io.Reader, n int) {
 			zw.Add(header, r, n)
 			sem.Release(1)
 		}, func(url string) *image.Paletted {

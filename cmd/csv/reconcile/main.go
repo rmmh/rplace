@@ -132,10 +132,10 @@ func main() {
 			for y := 0; y < 1000; y++ {
 				for x := 0; x < 1000; x++ {
 					wc := si.ColorIndexAt(x, y)
-					sc := state.ColorIndexAt(x+1000*(s.Quad%2), y+1000*(s.Quad/2))
+					sc := state.ColorIndexAt(x+1000*(s.Canvas%2), y+1000*(s.Canvas/2))
 					if wc != sc {
 						fmt.Printf("WHAT snap:%d @ %d (%d,%d) wc:%d sc:%d\n", snapN, s.Ts, x, y, wc, sc)
-						state.SetColorIndex(x+1000*(s.Quad%2), y+1000*(s.Quad/2), wc)
+						state.SetColorIndex(x+1000*(s.Canvas%2), y+1000*(s.Canvas/2), wc)
 					}
 				}
 			}
@@ -150,7 +150,7 @@ func main() {
 			for y := 0; y < 1000; y++ {
 				for x := 0; x < 1000; x++ {
 					wc := si.ColorIndexAt(x, y)
-					sc := state.ColorIndexAt(x+1000*(s.Quad%2), y+1000*(s.Quad/2))
+					sc := state.ColorIndexAt(x+1000*(s.Canvas%2), y+1000*(s.Canvas/2))
 					if wc != sc {
 						mm++
 					}
