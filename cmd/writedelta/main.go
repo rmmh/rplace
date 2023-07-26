@@ -301,7 +301,7 @@ func makeTickDelta(urlspath string) {
 
 	s := bufio.NewScanner(f)
 
-	semWeight := int64(8)
+	semWeight := int64(24)
 	sem := semaphore.NewWeighted(semWeight)
 
 	tn := -1
