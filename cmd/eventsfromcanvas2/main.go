@@ -24,8 +24,12 @@ import (
 var (
 	inFile      = flag.String("in", "", "input file name")
 	outFile     = flag.String("out", "", "output file name")
+	startTs     = flag.Int64("start", 0, "start TS at this point")
+	endTs       = flag.Int64("end", 0, "end TS at this point")
+	dumpTs      = flag.Int64("ts", 0, "dump first snapshots after a given timestamp")
 	maxImages   = flag.Int("maximages", 0, "stop after crunching this many images")
 	crunch      = flag.Bool("crunch", false, "crunch bin into a denser format")
+	average     = flag.Bool("average", false, "produce an averaged image of the given time period")
 	crunchSplit = flag.Int("crunchsplit", 0, "split crunch bins into segments this many seconds long")
 	canvasDir   = flag.String("datadir", "", "path of canvas_*.zip files")
 	cpuprofile  = flag.String("cpuprofile", "", "write cpu profile to file")
@@ -61,11 +65,11 @@ func (k SnapKey) C() int {
 
 func (k SnapKey) OffsetX() int {
 	c, _ := k.Split()
-	return (c%3)*1000 - 1000
+	return (c % 3) * 1000
 }
 func (k SnapKey) OffsetY() int {
 	c, _ := k.Split()
-	return (c/3)*1000 - 500
+	return (c / 3) * 1000
 }
 
 func (s SnapKey) String() string {
@@ -76,7 +80,7 @@ func (s SnapKey) String() string {
 type ImageStitcher struct {
 	snaps          map[SnapKey]*Snapshot
 	filenameToPrev map[string]int64
-	cache          [6]struct {
+	cache          [6][16]struct {
 		key   SnapKey
 		Image *image.Paletted
 	}
@@ -134,10 +138,10 @@ func ApplyDelta(base, delta *image.Paletted) *image.Paletted {
 		panic("expected transparency to be zero")
 	}
 	if len(delta.Palette) != 33 {
-		panic(fmt.Sprintf("bad len %d", len(delta.Palette)))
+		panic(fmt.Sprintf("delta bad len %d", len(delta.Palette)))
 	}
 	if len(base.Palette) != 33 {
-		panic(fmt.Sprintf("bad len %d", len(base.Palette)))
+		panic(fmt.Sprintf("base bad len %d", len(base.Palette)))
 	}
 	for i := 0; i < len(delta.Pix); i++ {
 		if ci := delta.Pix[i]; ci > 0 {
@@ -154,10 +158,20 @@ func (i *ImageStitcher) GetImage(k SnapKey) (*image.Paletted, error) {
 		return nil, fmt.Errorf("bad image key: %s", k)
 	}
 	c := k.C()
-	if i.cache[c].key == k {
-		return i.cache[c].Image, nil
+	ent := &i.cache[c][(k>>4)&15]
+	if ent.key == k {
+		return ent.Image, nil
 	}
-	var pi *image.Paletted
+
+	var err error
+	var pi, base *image.Paletted
+	if !s.full {
+		base, err = i.GetImage(s.base.key)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	f, err := s.src.Open(s.name)
 	if err != nil {
 		log.Fatal(s, err)
@@ -168,15 +182,11 @@ func (i *ImageStitcher) GetImage(k SnapKey) (*image.Paletted, error) {
 		return nil, fmt.Errorf("%s: %v", s.name, err)
 	}
 	pi = im.(*image.Paletted)
-	if !s.full {
-		base, err := i.GetImage(s.base.key)
-		if err != nil {
-			return nil, err
-		}
+	if base != nil {
 		pi = ApplyDelta(base, pi)
-		i.cache[c].key = k
-		i.cache[c].Image = pi
 	}
+	ent.key = k
+	ent.Image = pi
 	return pi, nil
 }
 
@@ -215,22 +225,25 @@ func (i *ImageStitcher) addZip(filename string) int {
 
 	orph := 0
 
+	files := make([]string, 0, len(r.File))
 	for _, f := range r.File {
-		if !strings.HasSuffix(f.Name, ".png") {
+		files = append(files, f.Name)
+	}
+	sort.Strings(files)
+
+	for _, f := range files {
+		if !strings.HasSuffix(f, ".png") {
 			continue
 		}
-		canvas, ts, full := parseImageFilename(f.Name)
+		canvas, ts, full := parseImageFilename(f)
 		if filename == "framedata_from_discord.zip" && ts >= 1689873917000 {
 			// idfk, dude
 			continue
 		}
-		if ts < 1689859449000 {
-			continue // spurious empty full frames
-		}
 		var base *Snapshot
 		if !full {
 			// only add delta frames if we have the required previous frame too
-			baseTs := i.filenameToPrev[filepath.Base(f.Name)]
+			baseTs := i.filenameToPrev[filepath.Base(f)]
 			base = i.snaps[GetKey(canvas, baseTs)]
 			if base == nil {
 				orph++
@@ -240,7 +253,7 @@ func (i *ImageStitcher) addZip(filename string) int {
 		k := GetKey(canvas, ts)
 		i.snaps[k] = &Snapshot{
 			key:  k,
-			name: f.Name,
+			name: f,
 			src:  r,
 			full: full,
 			base: base,
@@ -282,28 +295,6 @@ func writeEventsBinary() {
 	snaps := i.SortedSnaps()
 	fmt.Println("scanned", len(snaps), "images", snaps[:30], "...", snaps[len(snaps)-30:])
 
-	if false {
-		for _, c := range []int{1, 2, 5, 4} {
-			for _, s := range snaps {
-				if s.C() == c && s.Ts() > 1689875100815 {
-					fmt.Println(s)
-					im, err := i.GetImage(s)
-					if err != nil {
-						log.Fatal(err)
-					}
-					f, err := os.Create("hack/" + s.String() + ".png")
-					if err != nil {
-						log.Fatal(err)
-					}
-					png.Encode(f, im)
-					f.Close()
-					break
-				}
-			}
-		}
-		return
-	}
-
 	wf, err := os.Create(*outFile)
 	if err != nil {
 		log.Fatal(err)
@@ -317,16 +308,14 @@ func writeEventsBinary() {
 	w.Write([]byte("PIXELPAK"))
 
 	var buf [8]byte
-	start_time := uint64(snaps[0].Ts())
-	binary.LittleEndian.PutUint64(buf[:8], start_time)
-	w.Write(buf[:8])
+	var start_time uint64
 
 	firstImage, err := i.GetImage(snaps[0])
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	state := image.NewPaletted(image.Rect(0, 0, 2000, 2000), firstImage.Palette)
+	state := image.NewPaletted(image.Rect(0, 0, 3000, 2000), firstImage.Palette)
 	for i := 0; i < len(state.Pix); i++ {
 		state.Pix[i] = 32
 	}
@@ -334,14 +323,30 @@ func writeEventsBinary() {
 	ev := 0
 
 	for snapN, s := range snaps {
+		if s.Ts() < 1689820000000 {
+			continue
+		}
+		if *startTs != 0 && s.Ts() < *startTs {
+			continue
+		}
+		if *endTs != 0 && s.Ts() > *endTs {
+			break
+		}
+
+		if start_time == 0 {
+			start_time = uint64(s.Ts())
+			binary.LittleEndian.PutUint64(buf[:8], start_time)
+			w.Write(buf[:8])
+		}
+
 		start := time.Now()
 		si, err := i.GetImage(s)
-		elapsed := time.Now().Sub(start)
+		elapsed := time.Since(start)
 		if err != nil {
 			log.Println("error decoding", i.snaps[s].name, err)
 			continue
 		}
-		if elapsed > 15*time.Millisecond {
+		if elapsed > 20*time.Millisecond {
 			log.Println("SLOW", s, i.snaps[s].full, elapsed)
 		}
 
@@ -351,17 +356,14 @@ func writeEventsBinary() {
 
 		binary.LittleEndian.PutUint32(buf[4:], uint32(uint64(s.Ts())-start_time))
 
+		sev := ev
 		for y := 0; y < 1000; y++ {
 			for x := 0; x < 1000; x++ {
 				ox := x + s.OffsetX()
 				oy := y + s.OffsetY()
 
-				if oy < 0 || oy >= 2000 || ox < 0 || ox >= 2000 {
-					continue
-				}
-
 				wc := si.Pix[x+y*1000]
-				sc := state.Pix[ox+oy*2000]
+				sc := state.Pix[ox+oy*3000]
 
 				if wc != sc {
 					ev++
@@ -369,10 +371,12 @@ func writeEventsBinary() {
 					// pixel changed event!
 					// format:
 					// 4B pos+color: 11b x, 11b y, 5b new color 5b old color
-					// 4B timestamp: offset since start time
+					// 23b timestamp: offset since start time (little endian)
+					// 1b 12th bit of x offset
 					// easily reversible!
-					packed := uint32(uint32(ox) + uint32(oy)<<11 + uint32(wc-1)<<22 + uint32(sc-1)<<27)
+					packed := uint32((uint32(ox) & 2047) + uint32(oy)<<11 + uint32(wc-1)<<22 + uint32(sc-1)<<27)
 					binary.LittleEndian.PutUint32(buf[:4], packed)
+					buf[7] = (buf[7] & 127) | byte((ox>>4)&128)
 					w.Write(buf[:])
 				}
 			}
@@ -380,7 +384,14 @@ func writeEventsBinary() {
 
 		// if snapN > 1000 {break}
 
-		fmt.Printf("%d/%d %d %d\r", snapN, len(snaps), ev, s.Ts())
+		if ev-sev > 10000 {
+			fmt.Printf("\n!!! huge delta %d events generated %d\n\n", ev-sev, s.Ts())
+		}
+
+		if snapN&0x7f == 0 {
+			sts := time.Unix(s.Ts()/1000, 0)
+			fmt.Printf("%d/%d %d %d %s\r", snapN, len(snaps), ev, s.Ts(), sts.Format("2006-01-02 15:04:05"))
+		}
 	}
 }
 
@@ -400,15 +411,16 @@ func crunchEventsBinary() {
 
 	br := bufio.NewReader(r)
 
-	var buf [8]byte
+	var buf [10]byte
 	var tstart [8]byte
 
 	br.Read(buf[:8])
-	if !reflect.DeepEqual(buf[:], []byte("PIXELPAK")) {
-		log.Fatal("unknown header", buf)
+	if !reflect.DeepEqual(buf[:8], []byte("PIXELPAK")) {
+		log.Fatal("unknown header", buf[:8])
 	}
 
 	br.Read(tstart[:8])
+	startTime := binary.LittleEndian.Uint64(tstart[:])
 
 	curTs := uint64(0)
 	curOct := uint32(0)
@@ -458,7 +470,7 @@ func crunchEventsBinary() {
 		groupCount++
 		n := binary.PutUvarint(buf[:], curTs-lastTime)
 		lastTime = curTs
-		n += binary.PutUvarint(buf[n:], uint64(obcount<<3+int(curOct)))
+		n += binary.PutUvarint(buf[n:], uint64(obcount<<4+int(curOct)))
 		w.Write(buf[:n])
 		w.Write(obuf)
 		obuf = obuf[:0]
@@ -467,7 +479,7 @@ func crunchEventsBinary() {
 
 	writeHeader()
 
-	ocs := make([]uint8, 2000*2000)
+	ocs := make([]uint8, 3000*2000)
 	for i := range ocs {
 		ocs[i] = 31
 	}
@@ -479,17 +491,20 @@ func crunchEventsBinary() {
 		}
 
 		packed := binary.LittleEndian.Uint32(buf[:4])
-		timeOffset := binary.LittleEndian.Uint32(buf[4:])
-
+		x := (packed & 0x7FF) | ((uint32(buf[7]) << 4) & 2048)
+		y := (packed >> 11) & 0x7FF
 		new_color := (packed >> 22) & 31
 		old_color := (packed >> 27) & 31
-		x := packed & 0x7FF
-		y := (packed >> 11) & 0x7FF
-		oct := x/1000 + 2*(y/500)
+		buf[7] &= 127
+		timeOffset := binary.LittleEndian.Uint32(buf[4:])
 
-		//fmt.Println(x, y, new_color, old_color)
+		// fmt.Println(x, y, new_color, old_color, packed, timeOffset)
 
-		ocs[x+y*2000] ^= uint8(new_color ^ old_color)
+		oct := y/500 + 4*(x/1000)
+		if oct >= 12 {
+			panic("bad octant")
+		}
+		ocs[x+y*3000] ^= uint8(new_color ^ old_color)
 
 		if uint64(timeOffset) != curTs || oct != curOct {
 			writeChunk()
@@ -507,7 +522,77 @@ func crunchEventsBinary() {
 		obcount++
 	}
 	writeChunk()
-	log.Println("groups:", groupCount, "lastTs:", curTs+binary.LittleEndian.Uint64(tstart[:]))
+	log.Println("splits:", splitN, "groups:", groupCount, "startTs:", startTime, "endTs:", curTs+startTime)
+}
+
+func computeAverage() {
+	if *canvasDir == "" {
+		log.Fatal("-datadir is required")
+	}
+
+	i := NewImageStitcher(*canvasDir)
+	snaps := i.SortedSnaps()
+	fmt.Println("scanned", len(snaps), "images", snaps[:30], "...", snaps[len(snaps)-30:])
+
+	counts := make([][33]int, 3000*2000)
+
+	firstImage, err := i.GetImage(snaps[0])
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	state := image.NewPaletted(image.Rect(0, 0, 3000, 2000), firstImage.Palette)
+	for i := 0; i < len(state.Pix); i++ {
+		state.Pix[i] = 32
+	}
+
+	for snapN, s := range snaps {
+		if *startTs != 0 && s.Ts() < *startTs {
+			continue
+		}
+		if *endTs != 0 && s.Ts() > *endTs {
+			break
+		}
+		image, err := i.GetImage(s)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		for y := 0; y < 1000; y++ {
+			for x := 0; x < 1000; x++ {
+				ox := x + s.OffsetX()
+				oy := y + s.OffsetY()
+				counts[ox+oy*3000][image.Pix[x+y*1000]]++
+			}
+		}
+
+		sts := time.Unix(s.Ts()/1000, 0)
+		fmt.Printf("%d/%d %d %s\r", snapN, len(snaps), s.Ts(), sts.Format("2006-01-02 15:04:05"))
+	}
+
+	for i, cs := range counts {
+		max := 0
+		maxC := uint8(0)
+		for j, c := range cs {
+			if c > max {
+				maxC = uint8(j)
+				max = c
+			}
+		}
+		state.Pix[i] = maxC
+	}
+
+	wf, err := os.Create(*outFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer wf.Close()
+
+	err = png.Encode(wf, state)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 }
 
 func main() {
@@ -522,11 +607,37 @@ func main() {
 		defer pprof.StopCPUProfile()
 	}
 
+	if *dumpTs != 0 {
+		i := NewImageStitcher(*canvasDir)
+		snaps := i.SortedSnaps()
+		for _, c := range []int{1, 2, 5, 4} {
+			for _, s := range snaps {
+				if s.C() == c && s.Ts() > *dumpTs {
+					fmt.Println(s)
+					im, err := i.GetImage(s)
+					if err != nil {
+						log.Fatal(err)
+					}
+					f, err := os.Create("hack/" + s.String() + ".png")
+					if err != nil {
+						log.Fatal(err)
+					}
+					png.Encode(f, im)
+					f.Close()
+					break
+				}
+			}
+		}
+		return
+	}
+
 	if *outFile == "" {
 		log.Fatal("-out is required")
 	}
 
-	if *crunch {
+	if *average {
+		computeAverage()
+	} else if *crunch {
 		crunchEventsBinary()
 	} else {
 		writeEventsBinary()

@@ -5,7 +5,7 @@
 <body style="overflow:hidden;margin:0;background-color:black;color:white;">
 <div style="margin:5px;display:flex;">
     <span id="timestamp"></span>&nbsp;<br>
-    <input id="timeslider" type="range" min="1689859449000" max="1689999304121" value="0" style="flex-grow:1;display:inline;" draggable="false">
+    <input id="timeslider" type="range" min="1689859449000" max="1690301898148" value="0" style="flex-grow:1;display:inline;" draggable="false">
 </div>
 <div style="margin:5px;display:flex;">
     <span id="speed" style="width:5em;text-align:center;">5x</span>
@@ -19,11 +19,16 @@
     </datalist>
 </div>
 <div id="viewport" style="height:100%;user-select:none;overflow:clip">
-    <canvas id="canvas" style="image-rendering:pixelated;touch-action:none"  width="2000" height="2000" ondragstart="return false">
+    <canvas id="canvas" style="image-rendering:pixelated;touch-action:manipulation"  width="3000" height="2000" ondragstart="return false">
     </div>
 </body>
 <script type="text/javascript">
 "use strict";
+
+// group lengths can exceed a 16-bit integer,
+// so it's best to just pack the offsets as 24b with a 7b buf id
+let groupOffsets = new Uint32Array(9179590);
+const N_BUFS = 123;
 
 const palette = [
 "#6D001A", "#BE0039", "#FF4500", "#FFA800", "#FFD635", "#FFF8B8", "#00A368", "#00CC78",
@@ -129,13 +134,8 @@ function sleepFrame() {
     return new Promise(requestAnimationFrame);
 }
 
-let quadseen = 0;
-let quadstart = [0, 0, 0, 0];
-
-let pixelsPaletted = new Uint8Array(2000*2000);
-for (let i = 0; i < pixelsPaletted.length; i++) {
-    pixelsPaletted[i] = 31; // white
-}
+let quadind = 0, quadseen = 0;
+let quadstarts = [[0, 26112], [1689955228798, 419328], [1690013770377, 419424], [1690066988017, 489328], [1690135216019, 1048560], [1690164007740, 1048575], [1690220016901, 16777215], [2690220016901, 16777215]];
 
 function buf2hex(buffer) { // buffer is an ArrayBuffer
   return [...new Uint8Array(buffer)]
@@ -154,15 +154,27 @@ function updateTimestamp(skipSlider) {
 
 let ctx = canvas.getContext('2d');
 
-let imageData = ctx.getImageData(0, 0, 2000, 2000);;
+let imageData = ctx.getImageData(0, 0, 3000, 2000);;
 let pixels = imageData.data;
+
+let pixelsPaletted = new Uint8Array(3000*2000);
+function clearCanvas() {
+    for (let i = 0; i < pixelsPaletted.length; i++) {
+        pixelsPaletted[i] = 31; // white
+    }
+    for (let i = 0; i < pixels.length; i++) {
+        pixels[i] = 0;
+    }
+}
+clearCanvas();
+
 
 function dumpImageData(all) {
     if (all) {
         ctx.putImageData(imageData, 0, 0);
     } else {
-        let width = 1000 + 500 * (quadseen & 2);
-        let height = 1000 + 250 * (quadseen & 4);
+        let width = 3000;
+        let height = 2000;
         ctx.putImageData(imageData, 0, 0,
             cx, cy,
             Math.min(width - cx, cw),
@@ -173,7 +185,7 @@ function dumpImageData(all) {
 
 function applyGroup(count, oct, i) {
     function set(x, y, col) {
-        let o = 4 * (x + y * 2000);
+        let o = 4 * (x + y * 3000);
         pixels[o+0] = pal[3 * col];
         pixels[o+1] = pal[3 * col + 1];
         pixels[o+2] = pal[3 * col + 2];
@@ -181,62 +193,64 @@ function applyGroup(count, oct, i) {
     }
 
     function xor(x, y, col_xor) {
-        let col = pixelsPaletted[x + y * 2000] ^= col_xor;
-        let o = 4 * (x + y * 2000);
+        let col = pixelsPaletted[x + y * 3000] ^= col_xor;
+        let o = 4 * (x + y * 3000);
         pixels[o+0] = pal[3 * col];
         pixels[o+1] = pal[3 * col + 1];
         pixels[o+2] = pal[3 * col + 2];
     }
 
-    let ox = 1000 * (oct & 1);
-    let oy = 250 * (oct & 6);
-
-    let quad = (oct&1)+((oct&4)>>1);
+    let ox = 250 * (oct & 12);
+    let oy = 500 * (oct & 3);
 
     if (curGroup === 1 && speed > 0) {
-        // clear canvas
-        for (let o = 0; o < pixels.length; o += 4) {
-            pixels[o] = 0;
-            pixels[o+1] = 0;
-            pixels[o+2] = 0;
-        }
+        clearCanvas();
         updateTimestamp();
         dumpImageData(true);
+        quadind = 0;
         quadseen = 0;
     }
 
-    if (!(quadseen & (1<<quad))) {
-        quadstart[quad] ||= curGroup;
-        quadseen |= 1 << quad;
+    if (speed > 0 && quadstarts[quadind][0] <= startTime + curTs) {
+        let newQuads = quadstarts[quadind][1] ^ quadseen;
+        quadseen = quadstarts[quadind][1];
+        quadind++;
 
-        let sx = 1000 * (quad & 1), sy = 1000 * (quad >> 1);
+        for (let quad = 0; quad < 24; quad++) {
+            if (!(newQuads & (1<<quad))) continue;
 
-        console.log("fwd-white-quad", quad, curGroup, sx, sy, quadstart[quad]);
-        for (let y = sy; y < sy + 1000; y++) {
-            for (let x = sx; x < sx + 1000; x++) {
-                set(x, y, 31);
+            let sx = 500 * (quad >> 2), sy = 500 * (quad & 3);
+
+            //console.log("fwd-white-quad", quad, curGroup, sx, sy);
+            for (let y = sy; y < sy + 500; y++) {
+                for (let x = sx; x < sx + 500; x++) {
+                    set(x, y, 31);
+                }
             }
         }
+
 
         dumpImageData(true);
     }
+    if (speed < 0 && quadind > 0 && quadstarts[quadind][0] >= startTime + curTs) {
+        let newQuads = quadstarts[quadind - 1][1] ^ quadseen;
+        quadseen ^= newQuads;
+        quadind--;
 
-    for (let cq = 1; speed < 0 && cq < 4; cq++) {
-        if (quadstart[cq] != curGroup + 2) {
-            continue;
-        }
+        for (let quad = 0; quad < 24; quad++) {
+            if (!(newQuads & (1<<quad))) continue;
 
-        let sx = 1000 * (cq & 1), sy = 1000 * (cq >> 1);
+            let sx = 500 * (quad >> 2), sy = 500 * (quad & 3);
 
-        console.log("rev-black-quad", cq, curGroup, sx, sy);
-
-        for (let y = sy; y < sy + 1000; y++) {
-            for (let x = sx; x < sx + 1000; x++) {
-                set(x, y, 27);
+            //console.log("rev-black-quad", quad, curGroup, sx, sy);
+            for (let y = sy; y < sy + 500; y++) {
+                for (let x = sx; x < sx + 500; x++) {
+                    set(x, y, 27);
+                }
             }
         }
+
         dumpImageData(true);
-        quadseen ^= 1 << cq;
     }
 
     for (let j = 0; j < count; j++) {
@@ -326,12 +340,8 @@ async function renderLoop() {
     dumpImageData();
 }
 
-const N_BUFS = 84;
 let bufs = [];
 
-// group lengths can exceed a 16-bit integer,
-// so it's best to just pack the offsets as 24b with a 7b buf id
-let groupOffsets = new Uint32Array(5542546);
 let groupHashes = {};
 let curGroup = 0;
 let bufN = 0;
@@ -425,8 +435,8 @@ function nextEvent() {
         let start = curIndex;
         let to = readUvarint();
         let ocount = readUvarint();
-        let count = ocount >> 3;
-        let oct = ocount & 7;
+        let count = ocount >> 4;
+        let oct = ocount & 15;
 
         let evtStart = curIndex, evtEnd = curIndex + count * 3;
 
@@ -494,7 +504,7 @@ viewport.onwheel = function(e) {
     let bounds = viewport.getBoundingClientRect();
     let cx = e.clientX - bounds.left;
     let cy = e.clientY - bounds.top;
-    let mx = 1000-(1000-(cx-tx))/zoom;
+    let mx = 1500-(1500-(cx-tx))/zoom;
     let my = 1000-(1000-(cy-ty))/zoom;
 
     let oldZoom = zoom;
@@ -510,24 +520,47 @@ viewport.onwheel = function(e) {
 
     // thanks, wolframalpha! solving for mx_beforezoom=mx_afterzoom,
     // to keep the point the mouse is hovering over invariant after the zoom.
-    tx = zoom * (1000 + tx - cx) / oldZoom + cx - 1000;
+    tx = zoom * (1500 + tx - cx) / oldZoom + cx - 1500;
     ty = zoom * (1000 + ty - cy) / oldZoom + cy - 1000;
 
     canvas.style["image-rendering"] = zoom < 1 ? 'auto' : 'pixelated';
     updateTransform();
 }
 
+/*
+let scaling = false;
+viewport.touchstart = function(e) {
+    if (e.touches.length === 2) {
+        scaling = true;
+        pinchStart(e);
+    }
+}
+
+viewport.touchmove = function(e) {
+    if (scaling) {
+        pinchMove(e);
+    }
+}
+
+viewport.touchend = function(e) {
+    if (scaling) {
+        pinchMove(e);
+    }
+    scaling = false;
+}
+*/
+
 // track what part of the canvas is actually visible in the viewport for faster blitting
-let cx = 0, cw = 2000, cy = 0, ch = 2000;
+let cx = 2000, cw = 3000, cy = 400, ch = 2000;
 
 function updateTransform() {
     // clamp translation to canvas bounds
     let vr = viewport.getBoundingClientRect();
 
     tx = Math.min(tx, viewport.clientWidth - 20 - ((-1000 * zoom) + 1000));
-    tx = Math.max(tx, 20 - ((500 * (quadseen & 2) * zoom) + 1000));
+    tx = Math.max(tx, 20 - ((3000 * zoom) + 1000));
     ty = Math.min(ty, viewport.clientHeight - 20 - vr.top - ((-1000 * zoom) + 1000));
-    ty = Math.max(ty, 20 - ((250 * (quadseen & 4) * zoom) + 1000));
+    ty = Math.max(ty, 20 - ((2000 * zoom) + 1000));
 
     if (zoom === 1) {
         tx |= 0;
@@ -538,7 +571,7 @@ function updateTransform() {
 
     let cr = canvas.getBoundingClientRect();
     cx = Math.max(0, ((-cr.x / zoom)|0)-1);
-    cw = Math.min(2000, ((vr.width / zoom)|0) + 3);
+    cw = Math.min(3000, ((vr.width / zoom)|0) + 3);
     cy = Math.max(0, ((-cr.y / zoom)|0)-1);
     ch = Math.min(2000, ((vr.height / zoom)|0) + 3);
 
@@ -579,8 +612,8 @@ viewport.onmousemove = function(e) {
         ty += e.movementY;
         updateTransform();
     }
-}
 
+}
 window.oncontextmenu = function() {
     // ensure `right click -> save as` gets a whole, good canvas,
     // not just the visible rect
@@ -621,7 +654,7 @@ if (document.location.hash) {
     }
     setTransform(x, y, z);
 } else {
-    updateTransform();
+    setTransform(1500, 1000, 1);
 }
 </script>
 </html>
