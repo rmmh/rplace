@@ -558,14 +558,9 @@ function updateTransform() {
     let vr = viewport.getBoundingClientRect();
 
     tx = Math.min(tx, viewport.clientWidth - 20 - ((-1500 * zoom) + 1500));
-    tx = Math.max(tx, 20 - ((3000 * zoom) + 1500));
+    tx = Math.max(tx, 20 - ((3000 * zoom) + 1500))|0;
     ty = Math.min(ty, viewport.clientHeight - 20 - vr.top - ((-1000 * zoom) + 1000));
-    ty = Math.max(ty, 20 - ((2000 * zoom) + 1000));
-
-    if (zoom === 1) {
-        tx |= 0;
-        ty |= 0;
-    }
+    ty = Math.max(ty, 20 - ((2000 * zoom) + 1000))|0;
 
     canvas.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + zoom + ")";
 
