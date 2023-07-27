@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"flag"
@@ -29,6 +30,7 @@ var (
 	dumpTs      = flag.Int64("ts", 0, "dump first snapshots after a given timestamp")
 	maxImages   = flag.Int("maximages", 0, "stop after crunching this many images")
 	crunch      = flag.Bool("crunch", false, "crunch bin into a denser format")
+	column      = flag.Bool("column", false, "output columnar (per-pixel) event format")
 	average     = flag.Bool("average", false, "produce an averaged image of the given time period")
 	crunchSplit = flag.Int("crunchsplit", 0, "split crunch bins into segments this many seconds long")
 	canvasDir   = flag.String("datadir", "", "path of canvas_*.zip files")
@@ -525,6 +527,77 @@ func crunchEventsBinary() {
 	log.Println("splits:", splitN, "groups:", groupCount, "startTs:", startTime, "endTs:", curTs+startTime)
 }
 
+func crunchEventsColumn() {
+	r, err := os.Open(*inFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer r.Close()
+
+	br := bufio.NewReader(r)
+
+	var buf [10]byte
+	var tstart [8]byte
+
+	br.Read(buf[:8])
+	if !reflect.DeepEqual(buf[:8], []byte("PIXELPAK")) {
+		log.Fatal("unknown header", buf[:8])
+	}
+
+	br.Read(tstart[:8])
+
+	if *outFile == "" {
+		log.Fatal("required -out")
+	}
+	w, err := os.Create(*outFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	w.Write([]byte("COLMPACK"))
+	w.Write(tstart[:8])
+
+	lastTs := make([]uint32, 3000*2000)
+	bufs := make([]bytes.Buffer, 3000*2000)
+
+	for {
+		n, err := br.Read(buf[:8])
+		if err == io.EOF || n != 8 {
+			break
+		}
+
+		packed := binary.LittleEndian.Uint32(buf[:4])
+		x := (packed & 0x7FF) | ((uint32(buf[7]) << 4) & 2048)
+		y := (packed >> 11) & 0x7FF
+		new_color := (packed >> 22) & 31
+		buf[7] &= 127
+		timeOffset := binary.LittleEndian.Uint32(buf[4:])
+
+		o := x + y*3000
+		pixTs := lastTs[o]
+		lastTs[o] = timeOffset
+
+		n = binary.PutUvarint(buf[:], uint64(new_color)|(uint64(timeOffset-pixTs))<<5)
+		bufs[o].Write(buf[:n])
+	}
+
+	var lenBuf bytes.Buffer
+	for _, b := range bufs {
+		n := binary.PutUvarint(buf[:], uint64(b.Len()))
+		lenBuf.Write(buf[:n])
+	}
+
+	binary.Write(w, binary.LittleEndian, 20+uint32(lenBuf.Len()))
+	w.Write(lenBuf.Bytes())
+
+	for _, b := range bufs {
+		_, err := w.Write(b.Bytes())
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+}
+
 func computeAverage() {
 	if *canvasDir == "" {
 		log.Fatal("-datadir is required")
@@ -639,6 +712,8 @@ func main() {
 		computeAverage()
 	} else if *crunch {
 		crunchEventsBinary()
+	} else if *column {
+		crunchEventsColumn()
 	} else {
 		writeEventsBinary()
 	}
