@@ -25,6 +25,8 @@
 <script type="text/javascript">
 "use strict";
 
+const viewport = document.getElementById("viewport");
+
 // group lengths can exceed a 16-bit integer,
 // so it's best to just pack the offsets as 24b with a 7b buf id
 let groupOffsets = new Uint32Array(11451044);
